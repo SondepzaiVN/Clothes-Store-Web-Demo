@@ -32,7 +32,7 @@ interface Product {
   description: string; sizes: string[]; colors: string[];
 }
 interface CartItem { product: Product; quantity: number; size: string; color: string; selected: boolean; }
-interface BuyerMsg { id: string; from: "user" | "shop"; text: string; time: string; }
+interface BuyerMsg { id: string; from: "user" | "admin"; text: string; time: string; }
 interface BuyerConvo { shopId: string; shopName: string; shopAvatar: string; messages: BuyerMsg[]; unread: number; }
 interface AppUser { id: string; name: string; email: string; hasShop: boolean; shopId?: string; }
 interface ShopForm { name: string; desc: string; phone: string; address: string; }
@@ -144,22 +144,7 @@ const INIT_ORDERS: Order[] = [
   { id:"ORD-006", customer:"Hoàng Thị Mai",      phone:"0989 789 012", address:"90 Pasteur, Q.1",                     items:[{name:"Quần Wide Leg Kaki",size:"M",color:"Xám",qty:1,price:350000}],                                                                       total:350000,  date:"30/06/2026", status:"completed" },
 ];
 
-const INIT_BUYER_ORDERS: Order[] = [
-  {
-    id:"DECO-240701", customer:"Nguyễn Mai Anh", phone:"0901 234 567",
-    address:"123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
-    items:[{name:"Áo Linen Trắng Cổ V",size:"M",color:"Trắng",qty:1,price:285000}],
-    total:285000, date:"07/07/2026", status:"shipping", paymentMethod:"bank",
-    paymentStatus:"paid", trackingUpdated:"10:30, 10/07/2026"
-  },
-  {
-    id:"DECO-240630", customer:"Nguyễn Mai Anh", phone:"0901 234 567",
-    address:"123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
-    items:[{name:"Váy Midi Hoa Nhí Vintage",size:"S",color:"Xanh sage",qty:1,price:420000}],
-    total:420000, date:"30/06/2026", status:"completed", paymentMethod:"cod",
-    paymentStatus:"paid", trackingUpdated:"02/07/2026"
-  }
-];
+const INIT_BUYER_ORDERS: Order[] = [];
 
 const VOUCHERS = [
   { code:"BEST10", label:"Giảm 10% - tối đa 50.000đ", discount:(total: number) => Math.min(50000, Math.round(total * 0.1)) },
@@ -203,17 +188,15 @@ const INIT_SELLER_CONVOS: SellerConvo[] = [
     ]},
 ];
 
-const INIT_BUYER_CONVOS: BuyerConvo[] = [
-  { shopId:"s2", shopName:"Bông Studio", shopAvatar:SHOP_AVATARS.s2, unread:1,
-    messages:[
-      { id:"bm1", from:"user", text:"Shop ơi, váy midi còn size M không?", time:"10:32" },
-      { id:"bm2", from:"shop", text:"Dạ còn ạ! Có màu hồng phấn và xanh sage nha bạn 🌸", time:"10:35" },
-    ]},
-  { shopId:"s1", shopName:"Linen & Co.", shopAvatar:SHOP_AVATARS.s1, unread:0,
-    messages:[
-      { id:"bm3", from:"shop", text:"Đơn hàng đã giao thành công 📦", time:"Hôm qua" },
-    ]},
-];
+const DECO_SUPPORT_ID = "deco-support";
+const createSupportConversation = (): BuyerConvo => ({
+  shopId: DECO_SUPPORT_ID,
+  shopName: "Bộ phận hỗ trợ DECO",
+  shopAvatar: "",
+  messages: [],
+  unread: 0,
+});
+const INIT_BUYER_CONVOS: BuyerConvo[] = [];
 
 // ─── Shared UI components ─────────────────────────────────────────────────────
 
@@ -1138,7 +1121,7 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState("");
   const [authForm, setAuthForm]   = useState({ name:"", email:"", phone:"", password:"", confirmPassword:"", otp:"" });
   const [pendingAction, setPendingAction] = useState<"checkout" | "messages" | null>(null);
-  const [pendingConversation, setPendingConversation] = useState<{ shopId: string; name: string } | null>(null);
+  const [registeredAccount, setRegisteredAccount] = useState<{ name: string; email: string } | null>(null);
   const [searchQ, setSearchQ]     = useState("");
   const [searchIn, setSearchIn]   = useState("");
   const [liked, setLiked]         = useState<string[]>([]);
@@ -1153,7 +1136,7 @@ export default function App() {
   const [showMenu, setShowMenu]   = useState(false);
   const [payForm, setPayForm]     = useState({ name:"", phone:"", address:"", method:"cod", voucher:"BEST10", note:"" });
   const [payError, setPayError]   = useState("");
-  const [savedAddress, setSavedAddress] = useState({ name:"Nguyễn Mai Anh", phone:"0901 234 567", address:"123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM" });
+  const [savedAddress, setSavedAddress] = useState({ name:"", phone:"", address:"" });
   const [buyerOrders, setBuyerOrders] = useState<Order[]>(INIT_BUYER_ORDERS);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [orderNotice, setOrderNotice] = useState("");
@@ -1163,6 +1146,7 @@ export default function App() {
 
   const msgEnd = useRef<HTMLDivElement>(null);
   useEffect(() => { msgEnd.current?.scrollIntoView({ behavior:"smooth" }); }, [activeBC, buyConvos]);
+  useEffect(() => { window.scrollTo({ top:0, behavior:"auto" }); }, [view]);
 
   const allProducts  = [...BASE_PRODUCTS, ...extraP];
   const cartCount    = cart.reduce((a, c) => a + c.quantity, 0);
@@ -1173,20 +1157,21 @@ export default function App() {
   const voucherDiscount = selectedVoucher.discount(cartTotal);
   const shippingFee = cartTotal > 0 ? 30000 : 0;
   const checkoutTotal = Math.max(0, cartTotal + shippingFee - voucherDiscount);
-  const totalUnread  = buyConvos.reduce((a, c) => a + c.unread, 0);
+  const totalUnread  = user ? buyConvos.reduce((a, c) => a + c.unread, 0) : 0;
   const filtered     = allProducts.filter((p) => category === "Tất cả" || p.category === category);
   const recommended  = allProducts.filter((p) => liked.some((id) => { const lp = allProducts.find((x) => x.id === id); return lp && (lp.category === p.category || lp.shopId === p.shopId) && p.id !== id; })).slice(0, 4);
 
   const toggleLike   = (id: string) => setLiked((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const openProduct  = (p: Product) => { setSelProd(p); setSelSize(""); setSelColor(""); setView("product"); };
   const openShop     = (sid: string) => { setViewShop(sid); setView("shop-profile"); };
-  const openConvo    = (shopId: string, name: string) => {
-    if (!user) { setPendingAction("messages"); setPendingConversation({ shopId, name }); setShowAuth(true); return; }
-    if (!buyConvos.find((c) => c.shopId === shopId)) setBuyConvos((prev) => [...prev, { shopId, shopName:name, shopAvatar: SHOP_AVATARS[shopId] || SHOP_AVATARS.s1, messages:[], unread:0 }]);
-    setBuyConvos((prev) => prev.map((c) => c.shopId === shopId ? { ...c, unread:0 } : c));
-    setActiveBC(shopId); setView("messages");
+  const ensureSupportConversation = () => setBuyConvos((prev) => prev.some((c) => c.shopId === DECO_SUPPORT_ID) ? prev : [createSupportConversation()]);
+  const openConvo    = (_shopId: string, _name: string) => {
+    if (!user) { setPendingAction("messages"); setShowAuth(true); return; }
+    ensureSupportConversation();
+    setBuyConvos((prev) => prev.map((c) => c.shopId === DECO_SUPPORT_ID ? { ...c, unread:0 } : c));
+    setActiveBC(DECO_SUPPORT_ID); setView("messages");
   };
-  const openMessages = () => { if (!user) { setPendingAction("messages"); setShowAuth(true); return; } setActiveBC(buyConvos[0]?.shopId ?? null); setView("messages"); };
+  const openMessages = () => { if (!user) { setPendingAction("messages"); setShowAuth(true); return; } ensureSupportConversation(); setActiveBC(DECO_SUPPORT_ID); setView("messages"); };
   const addToCart    = () => {
     if (!selProd || !selSize || !selColor) return;
     setCart((prev) => { const ex = prev.find((i) => i.product.id === selProd.id && i.size === selSize && i.color === selColor); return ex ? prev.map((i) => i === ex ? { ...i, quantity: i.quantity + 1, selected:true } : i) : [...prev, { product: selProd, quantity:1, size: selSize, color: selColor, selected:true }]; });
@@ -1200,7 +1185,7 @@ export default function App() {
     const t = new Date().toLocaleTimeString("vi-VN", { hour:"2-digit", minute:"2-digit" });
     setBuyConvos((prev) => prev.map((c) => c.shopId === activeBC ? { ...c, messages:[...c.messages, { id: Date.now().toString(), from:"user", text: msgIn.trim(), time: t }] } : c));
     setMsgIn("");
-    setTimeout(() => { const r: BuyerMsg = { id:(Date.now()+1).toString(), from:"shop", text:"Cảm ơn bạn! Shop sẽ trả lời sớm nhất 🌸", time: new Date().toLocaleTimeString("vi-VN",{hour:"2-digit",minute:"2-digit"}) }; setBuyConvos((prev) => prev.map((c) => c.shopId === activeBC ? { ...c, messages:[...c.messages, r] } : c)); }, 1000);
+    setTimeout(() => { const r: BuyerMsg = { id:(Date.now()+1).toString(), from:"admin", text:"Cảm ơn bạn! Bộ phận hỗ trợ DECO sẽ phản hồi sớm nhất.", time: new Date().toLocaleTimeString("vi-VN",{hour:"2-digit",minute:"2-digit"}) }; setBuyConvos((prev) => prev.map((c) => c.shopId === activeBC ? { ...c, messages:[...c.messages, r] } : c)); }, 1000);
   };
   const prepareCheckout = () => {
     const bestVoucher = VOUCHERS.slice(0, 2).reduce((best, current) => current.discount(cartTotal) > best.discount(cartTotal) ? current : best, VOUCHERS[0]);
@@ -1228,20 +1213,25 @@ export default function App() {
   const verifyOtp = () => {
     if (authForm.otp !== "123456") { setAuthError("OTP không đúng hoặc đã hết hạn."); return; }
     if (authMode === "register") {
+      setRegisteredAccount({ name:authForm.name.trim(), email:authForm.email.trim() });
+      setBuyerOrders([]); setBuyConvos([]); setActiveBC(null);
+      setSavedAddress({ name:"", phone:"", address:"" });
+      setSelectedOrderId(null); setLastOrder(null);
       setAuthMode("login"); setAuthStep("credentials"); setAuthNotice("Tạo tài khoản thành công. Vui lòng đăng nhập."); setAuthError("");
       setAuthForm((prev) => ({ ...prev, name:"", phone:"", password:"", confirmPassword:"", otp:"" })); return;
     }
-    setUser({ id:"u1", name:"Nguyễn Mai Anh", email:authForm.email, hasShop:false });
+    const loginEmail = authForm.email.trim();
+    const displayName = registeredAccount?.email.toLowerCase() === loginEmail.toLowerCase()
+      ? registeredAccount.name
+      : loginEmail.split("@")[0] || "Người dùng";
+    setUser({ id:"u1", name:displayName, email:loginEmail, hasShop:false });
     setShowAuth(false); setAuthStep("credentials"); setAuthError(""); setAuthNotice("");
     setAuthForm({ name:"", email:"", phone:"", password:"", confirmPassword:"", otp:"" });
     if (pendingAction === "checkout") prepareCheckout();
     if (pendingAction === "messages") {
-      if (pendingConversation && !buyConvos.find((c) => c.shopId === pendingConversation.shopId)) {
-        setBuyConvos((prev) => [...prev, { shopId:pendingConversation.shopId, shopName:pendingConversation.name, shopAvatar:SHOP_AVATARS[pendingConversation.shopId] || SHOP_AVATARS.s1, messages:[], unread:0 }]);
-      }
-      setActiveBC(pendingConversation?.shopId || buyConvos[0]?.shopId || null); setView("messages");
+      ensureSupportConversation(); setActiveBC(DECO_SUPPORT_ID); setView("messages");
     }
-    setPendingAction(null); setPendingConversation(null);
+    setPendingAction(null);
   };
 
   const placeOrder = () => {
@@ -1276,7 +1266,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-card w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden">
             <div className="bg-secondary p-6 text-center relative">
-              <button onClick={() => { setShowAuth(false); setAuthStep("credentials"); setAuthError(""); setAuthNotice(""); setPendingAction(null); setPendingConversation(null); }} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-muted transition-colors"><X size={15} className="text-muted-foreground" /></button>
+              <button onClick={() => { setShowAuth(false); setAuthStep("credentials"); setAuthError(""); setAuthNotice(""); setPendingAction(null); }} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-muted transition-colors"><X size={15} className="text-muted-foreground" /></button>
               <p className="font-['Playfair_Display'] text-2xl font-semibold">DECO</p>
               <p className="text-sm text-muted-foreground mt-1">Thời trang Việt Nam</p>
             </div>
@@ -1320,9 +1310,9 @@ export default function App() {
               <input value={searchIn} onChange={(e) => setSearchIn(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && searchIn.trim()) { setSearchQ(searchIn.trim()); setCategory("Tất cả"); setView("search"); } }} placeholder="Tìm áo, váy, quần..." className="w-full pl-9 pr-4 py-1.5 bg-secondary rounded-full text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 placeholder:text-muted-foreground" />
             </div>
             <div className="flex items-center gap-1 shrink-0">
-              <button onClick={openMessages} className="relative p-2 rounded-full hover:bg-secondary transition-colors">
+              <button onClick={openMessages} aria-label="Tin nhắn" title="Tin nhắn" className="relative p-2 rounded-full hover:bg-secondary transition-colors">
                 <MessageCircle size={20} />
-                {totalUnread > 0 && <span className="absolute top-1 right-1 w-4 h-4 bg-[#C05A2D] text-white text-[9px] font-bold rounded-full flex items-center justify-center">{totalUnread}</span>}
+                {user && totalUnread > 0 && <span className="absolute top-1 right-1 w-4 h-4 bg-[#C05A2D] text-white text-[9px] font-bold rounded-full flex items-center justify-center">{totalUnread}</span>}
               </button>
               <button onClick={() => { setView("cart"); setCheckout("bag"); }} className="relative p-2 rounded-full hover:bg-secondary transition-colors">
                 <ShoppingBag size={20} />
@@ -1341,7 +1331,6 @@ export default function App() {
                         <p className="text-xs text-muted-foreground">{user.email}</p>
                       </div>
                       <button onClick={() => { setSelectedOrderId(null); setView("orders"); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"><Package size={14} /> Đơn mua của tôi</button>
-                      <button onClick={() => { openMessages(); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"><MessageCircle size={14} /> Tin nhắn</button>
                       <button onClick={() => { setUser(null); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-destructive hover:bg-muted transition-colors"><LogOut size={14} /> Đăng xuất</button>
                     </div>
                   )}
@@ -1535,7 +1524,7 @@ export default function App() {
         {/* ── Buyer Order Tracking ── */}
         {view === "orders" && (() => {
           const order = buyerOrders.find((item) => item.id === selectedOrderId);
-          if (!order) return <div className="max-w-5xl mx-auto px-4 py-6"><div className="flex items-center justify-between mb-6"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn mua của tôi</h2><p className="text-sm text-muted-foreground">Theo dõi tình trạng xử lý và giao hàng</p></div><button onClick={() => setView("home")} className="text-sm text-muted-foreground">Tiếp tục mua sắm</button></div><div className="space-y-3">{buyerOrders.map((item) => <button key={item.id} onClick={() => { setSelectedOrderId(item.id); setOrderNotice(""); }} className="w-full bg-card border border-border rounded-2xl p-4 text-left hover:shadow-sm transition-shadow"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><div><span className="font-mono text-sm font-semibold">{item.id}</span><span className="text-xs text-muted-foreground ml-2">{item.date}</span></div><span className={`px-2.5 py-1 rounded-full text-xs font-medium ${ORDER_STATUS[item.status].cls}`}>{ORDER_STATUS[item.status].label}</span></div><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center"><Package size={20} className="text-[#C05A2D]"/></div><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{item.items.map((product) => product.name).join(", ")}</p><p className="text-xs text-muted-foreground">{item.items.reduce((sum, product) => sum + product.qty, 0)} sản phẩm · {item.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</p></div><span className="font-semibold text-[#C05A2D]">{fmt(item.total)}</span><ChevronRight size={16} className="text-muted-foreground"/></div></button>)}</div></div>;
+           if (!order) return <div className="max-w-5xl mx-auto px-4 py-6"><div className="flex items-center justify-between mb-6"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn mua của tôi</h2><p className="text-sm text-muted-foreground">Theo dõi tình trạng xử lý và giao hàng</p></div><button onClick={() => setView("home")} className="text-sm text-muted-foreground">Tiếp tục mua sắm</button></div>{buyerOrders.length === 0 ? <div className="bg-card border border-dashed border-border rounded-2xl py-16 px-6 text-center"><div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-[#C05A2D]/10 flex items-center justify-center"><Package size={25} className="text-[#C05A2D]"/></div><h3 className="font-semibold">Bạn chưa có đơn hàng nào</h3><p className="text-sm text-muted-foreground mt-1 mb-5">Các đơn được đặt thành công sẽ xuất hiện tại đây.</p><button onClick={() => setView("home")} className="px-5 py-2.5 bg-[#C05A2D] text-white rounded-full text-sm font-medium">Bắt đầu mua sắm</button></div> : <div className="space-y-3">{buyerOrders.map((item) => <button key={item.id} onClick={() => { setSelectedOrderId(item.id); setOrderNotice(""); }} className="w-full bg-card border border-border rounded-2xl p-4 text-left hover:shadow-sm transition-shadow"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><div><span className="font-mono text-sm font-semibold">{item.id}</span><span className="text-xs text-muted-foreground ml-2">{item.date}</span></div><span className={`px-2.5 py-1 rounded-full text-xs font-medium ${ORDER_STATUS[item.status].cls}`}>{ORDER_STATUS[item.status].label}</span></div><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center"><Package size={20} className="text-[#C05A2D]"/></div><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{item.items.map((product) => product.name).join(", ")}</p><p className="text-xs text-muted-foreground">{item.items.reduce((sum, product) => sum + product.qty, 0)} sản phẩm · {item.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</p></div><span className="font-semibold text-[#C05A2D]">{fmt(item.total)}</span><ChevronRight size={16} className="text-muted-foreground"/></div></button>)}</div>}</div>;
           const steps: OrderStatus[] = ["pending","preparing","shipping","completed"];
           const activeIndex = steps.indexOf(order.status);
           return <div className="max-w-5xl mx-auto px-4 py-6"><button onClick={() => { setSelectedOrderId(null); setOrderNotice(""); }} className="flex items-center gap-1.5 text-sm text-muted-foreground mb-5"><ArrowLeft size={15}/>Danh sách đơn hàng</button><div className="flex flex-wrap items-start justify-between gap-3 mb-5"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn hàng {order.id}</h2><p className="text-sm text-muted-foreground">Cập nhật gần nhất: {order.trackingUpdated || order.date}</p></div><span className={`px-3 py-1.5 rounded-full text-xs font-medium ${ORDER_STATUS[order.status].cls}`}>{ORDER_STATUS[order.status].label}</span></div>{orderNotice && <div className="mb-4 rounded-xl bg-green-50 px-4 py-3 text-sm text-green-700">{orderNotice}</div>}<div className="grid grid-cols-1 lg:grid-cols-[1.4fr_0.6fr] gap-5"><div className="space-y-5"><section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-5">Tiến độ giao hàng</h3>{order.status === "cancelled" ? <div className="rounded-xl bg-gray-50 p-4 text-sm text-gray-600">Đơn hàng đã được hủy và không tiếp tục vận chuyển.</div> : <div className="space-y-0">{steps.map((step, index) => <div key={step} className="flex gap-4"><div className="flex flex-col items-center"><div className={`w-8 h-8 rounded-full flex items-center justify-center ${index <= activeIndex ? "bg-[#C05A2D] text-white" : "bg-muted text-muted-foreground"}`}>{index < activeIndex ? <Check size={14}/> : index + 1}</div>{index < steps.length - 1 && <div className={`w-0.5 h-10 ${index < activeIndex ? "bg-[#C05A2D]" : "bg-border"}`}/>}</div><div className="pt-1"><p className={`text-sm font-medium ${index <= activeIndex ? "text-foreground" : "text-muted-foreground"}`}>{ORDER_STATUS[step].label}</p>{index === activeIndex && <p className="text-xs text-muted-foreground mt-0.5">Trạng thái hiện tại của đơn hàng</p>}</div></div>)}</div>}</section>{order.status === "shipping" && <section className="bg-card border border-border rounded-2xl overflow-hidden"><div className="h-44 bg-[radial-gradient(circle_at_30%_30%,#dbeafe,transparent_35%),linear-gradient(135deg,#f0fdf4,#eff6ff)] flex items-center justify-center"><div className="text-center"><MapPin size={30} className="mx-auto text-[#C05A2D] mb-2"/><p className="text-sm font-medium">Vị trí GPS tạm thời chưa khả dụng</p><p className="text-xs text-muted-foreground mt-1">Hiển thị trạng thái và thời gian cập nhật gần nhất</p></div></div></section>}<section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Sản phẩm</h3>{order.items.map((item, index) => <div key={index} className="flex justify-between gap-3 py-3 border-b border-border last:border-0"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.size} · {item.color} · x{item.qty}</p></div><span className="text-sm">{fmt(item.price * item.qty)}</span></div>)}</section></div><aside className="space-y-4"><section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Thông tin nhận hàng</h3><div className="space-y-2 text-sm"><p>{order.customer} · {order.phone}</p><p className="text-muted-foreground leading-relaxed">{order.address}</p>{order.note && <p className="text-muted-foreground">Ghi chú: {order.note}</p>}</div></section><section className="bg-card border border-border rounded-2xl p-5"><div className="flex justify-between text-sm mb-2"><span className="text-muted-foreground">Thanh toán</span><span>{order.paymentMethod === "cod" ? "COD" : order.paymentMethod === "bank" ? "Ngân hàng" : "Ví điện tử"}</span></div><div className="flex justify-between text-sm mb-3"><span className="text-muted-foreground">Trạng thái</span><span className={order.paymentStatus === "paid" ? "text-green-600" : "text-amber-600"}>{order.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</span></div><div className="flex justify-between font-semibold border-t border-border pt-3"><span>Tổng cộng</span><span className="text-[#C05A2D]">{fmt(order.total)}</span></div></section>{order.status === "pending" && <button onClick={() => { setBuyerOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, status:"cancelled" } : item)); setOrderNotice("Yêu cầu hủy đơn đã được ghi nhận."); }} className="w-full py-2.5 border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50">Hủy đơn hàng</button>}{order.status === "shipping" && <button onClick={() => { setBuyerOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, status:"completed", paymentStatus:"paid" } : item)); setOrderNotice("Đã xác nhận nhận hàng thành công."); }} className="w-full py-2.5 bg-[#C05A2D] text-white rounded-xl text-sm font-medium">Đã nhận được hàng</button>}{order.status === "completed" && <button onClick={() => setOrderNotice("Yêu cầu hoàn hàng đã được ghi nhận và đang chờ kiểm tra điều kiện.")} className="w-full py-2.5 border border-border rounded-xl text-sm font-medium flex items-center justify-center gap-2"><RotateCcw size={14}/>Yêu cầu hoàn hàng</button>}</aside></div></div>;
@@ -1543,50 +1532,32 @@ export default function App() {
 
         {/* ── Messages (buyer) ── */}
         {view === "messages" && (
-          <div className="max-w-5xl mx-auto px-4 py-6">
-            <h2 className="font-['Playfair_Display'] text-xl font-semibold mb-5">Tin nhắn</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 h-[520px]">
-              <div className="border border-border rounded-xl bg-card flex flex-col overflow-hidden">
-                <div className="p-3 border-b border-border shrink-0"><div className="relative"><Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" /><input placeholder="Tìm trò chuyện..." className="w-full pl-8 pr-3 py-1.5 bg-muted rounded-lg text-xs outline-none" /></div></div>
-                <div className="overflow-y-auto flex-1">
-                  {buyConvos.map((c) => (
-                    <button key={c.shopId} onClick={() => { setBuyConvos((prev) => prev.map((x) => x.shopId === c.shopId ? { ...x, unread:0 } : x)); setActiveBC(c.shopId); }} className={`flex items-center gap-3 w-full p-3 hover:bg-muted transition-colors text-left border-b border-border last:border-0 ${activeBC === c.shopId ? "bg-muted" : ""}`}>
-                      <img src={c.shopAvatar} alt={c.shopName} className="w-10 h-10 rounded-full object-cover shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between"><p className="text-sm font-medium truncate">{c.shopName}</p>{c.unread > 0 && <span className="w-5 h-5 bg-[#C05A2D] text-white text-[10px] font-bold rounded-full flex items-center justify-center shrink-0">{c.unread}</span>}</div>
-                        <p className="text-xs text-muted-foreground truncate">{c.messages.at(-1)?.text || "Bắt đầu trò chuyện"}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
+          <div className="max-w-3xl mx-auto px-4 py-6">
+            <div className="mb-5">
+              <h2 className="font-['Playfair_Display'] text-xl font-semibold">Hỗ trợ khách hàng</h2>
+              <p className="text-sm text-muted-foreground mt-1">Trao đổi trực tiếp với quản trị viên DECO về sản phẩm hoặc đơn hàng</p>
+            </div>
+            <div className="h-[540px] border border-border rounded-2xl bg-card flex flex-col overflow-hidden shadow-sm">
+              <div className="flex items-center gap-3 px-5 py-4 border-b border-border shrink-0">
+                <div className="w-10 h-10 rounded-full bg-[#C05A2D] text-white flex items-center justify-center"><ShieldCheck size={19}/></div>
+                <div><p className="text-sm font-semibold">Bộ phận hỗ trợ DECO</p><p className="text-xs text-muted-foreground">Quản trị viên hệ thống</p></div>
+                <span className="ml-auto flex items-center gap-1.5 text-xs text-green-600"><span className="w-2 h-2 rounded-full bg-green-500"/>Đang hoạt động</span>
               </div>
-              <div className="md:col-span-2 border border-border rounded-xl bg-card flex flex-col overflow-hidden">
-                {curBC ? (
-                  <>
-                    <div className="flex items-center gap-3 p-3.5 border-b border-border shrink-0">
-                      <img src={curBC.shopAvatar} alt={curBC.shopName} className="w-9 h-9 rounded-full object-cover" />
-                      <div><p className="text-sm font-medium">{curBC.shopName}</p><p className="text-xs text-green-500">Đang hoạt động</p></div>
+              <div className="flex-1 overflow-y-auto p-5 space-y-3">
+                {curBC && curBC.messages.length > 0 ? curBC.messages.map((m) => (
+                  <div key={m.id} className={`flex ${m.from === "user" ? "justify-end" : "justify-start"}`}>
+                    {m.from === "admin" && <div className="w-7 h-7 rounded-full bg-[#C05A2D]/10 text-[#C05A2D] flex items-center justify-center mr-2 mt-auto shrink-0"><ShieldCheck size={14}/></div>}
+                    <div className={`max-w-[75%] px-3.5 py-2.5 rounded-2xl text-sm ${m.from === "user" ? "bg-[#C05A2D] text-white rounded-br-sm" : "bg-muted rounded-bl-sm"}`}>
+                      <p>{m.text}</p>
+                      <p className={`text-[10px] mt-1 ${m.from === "user" ? "text-white/60" : "text-muted-foreground"}`}>{m.time}</p>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                      {curBC.messages.map((m) => (
-                        <div key={m.id} className={`flex ${m.from === "user" ? "justify-end" : "justify-start"}`}>
-                          {m.from === "shop" && <img src={curBC.shopAvatar} alt="" className="w-7 h-7 rounded-full object-cover mr-2 mt-auto shrink-0" />}
-                          <div className={`max-w-[70%] px-3.5 py-2.5 rounded-2xl text-sm ${m.from === "user" ? "bg-[#C05A2D] text-white rounded-br-sm" : "bg-muted rounded-bl-sm"}`}>
-                            <p>{m.text}</p>
-                            <p className={`text-[10px] mt-1 ${m.from === "user" ? "text-white/60" : "text-muted-foreground"}`}>{m.time}</p>
-                          </div>
-                        </div>
-                      ))}
-                      <div ref={msgEnd} />
-                    </div>
-                    <div className="p-3 border-t border-border flex gap-2 shrink-0">
-                      <input value={msgIn} onChange={(e) => setMsgIn(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMsg()} placeholder="Nhắn tin cho shop..." className="flex-1 px-4 py-2 bg-muted rounded-full text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
-                      <button onClick={sendMsg} className="w-9 h-9 bg-[#C05A2D] text-white rounded-full flex items-center justify-center hover:bg-[#A84D25] transition-colors shrink-0"><Send size={15} /></button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex-1 flex items-center justify-center text-muted-foreground"><div className="text-center"><MessageCircle size={40} className="mx-auto mb-3 opacity-30" /><p className="text-sm">Chọn một cuộc trò chuyện</p></div></div>
-                )}
+                  </div>
+                )) : <div className="h-full flex items-center justify-center text-center text-muted-foreground"><div><div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-[#C05A2D]/10 text-[#C05A2D] flex items-center justify-center"><MessageCircle size={25}/></div><p className="text-sm font-medium text-foreground">Bạn cần DECO hỗ trợ điều gì?</p><p className="text-xs mt-1">Hãy nhập nội dung bên dưới để bắt đầu cuộc trò chuyện.</p></div></div>}
+                <div ref={msgEnd} />
+              </div>
+              <div className="p-4 border-t border-border flex gap-2 shrink-0">
+                <input value={msgIn} onChange={(e) => setMsgIn(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMsg()} placeholder="Nhắn tin cho bộ phận hỗ trợ DECO..." className="flex-1 px-4 py-2.5 bg-muted rounded-full text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
+                <button onClick={sendMsg} aria-label="Gửi tin nhắn" className="w-10 h-10 bg-[#C05A2D] text-white rounded-full flex items-center justify-center hover:bg-[#A84D25] transition-colors shrink-0"><Send size={16} /></button>
               </div>
             </div>
           </div>
@@ -1635,7 +1606,7 @@ export default function App() {
           { label:"Trang chủ", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>, action:() => setView("home"), active: view === "home" },
           { label:"Tìm kiếm", icon:<Search size={20} />, action:() => { setView("search"); setSearchQ(""); }, active: view === "search" },
           { label:"Giỏ hàng", icon:<ShoppingBag size={20} />, action:() => { setView("cart"); setCheckout("bag"); }, active: view === "cart", badge: cartCount },
-          { label:"Tin nhắn",  icon:<MessageCircle size={20} />, action: openMessages, active: view === "messages", badge: totalUnread },
+          { label:"Tin nhắn",  icon:<MessageCircle size={20} />, action: openMessages, active: view === "messages", badge: user ? totalUnread : 0 },
           { label:"Tài khoản", icon:<User size={20} />, action:() => user ? setShowMenu(true) : setShowAuth(true), active:false },
         ].map((item) => (
           <button key={item.label} onClick={item.action} className={`flex-1 flex flex-col items-center py-2.5 gap-0.5 transition-colors ${item.active ? "text-[#C05A2D]" : "text-muted-foreground hover:text-foreground"}`}>

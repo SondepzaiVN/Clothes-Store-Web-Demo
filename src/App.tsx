@@ -4,7 +4,8 @@ import {
   Send, Store, User, ChevronRight, Check, LogOut, Sparkles, Tag,
   Trash2, Minus, Plus, Camera, ChevronDown, Package,
   BarChart2, Settings, Eye, EyeOff, Edit3, DollarSign,
-  Users, AlertCircle, Award, ArrowUpRight,
+  Users, AlertCircle, Award, ArrowUpRight, MapPin, RotateCcw,
+  CreditCard, TicketPercent, ShieldCheck,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -14,8 +15,9 @@ import {
 
 type View =
   | "home" | "product" | "cart" | "messages" | "shop-register"
-  | "search" | "shop-profile" | "seller-dashboard";
+  | "search" | "shop-profile" | "seller-dashboard" | "orders";
 type AuthMode = "login" | "register";
+type AuthStep = "credentials" | "otp";
 type CheckoutStep = "bag" | "payment" | "success";
 type DashView =
   | "overview" | "products" | "add-product" | "orders" | "order-detail"
@@ -29,7 +31,7 @@ interface Product {
   tags: string[]; rating: number; reviews: number; sold: number;
   description: string; sizes: string[]; colors: string[];
 }
-interface CartItem { product: Product; quantity: number; size: string; color: string; }
+interface CartItem { product: Product; quantity: number; size: string; color: string; selected: boolean; }
 interface BuyerMsg { id: string; from: "user" | "shop"; text: string; time: string; }
 interface BuyerConvo { shopId: string; shopName: string; shopAvatar: string; messages: BuyerMsg[]; unread: number; }
 interface AppUser { id: string; name: string; email: string; hasShop: boolean; shopId?: string; }
@@ -42,6 +44,10 @@ interface OrderItem { name: string; size: string; color: string; qty: number; pr
 interface Order {
   id: string; customer: string; phone: string; address: string;
   items: OrderItem[]; total: number; date: string; status: OrderStatus;
+  paymentMethod?: "cod" | "bank" | "wallet";
+  paymentStatus?: "pending" | "paid" | "failed";
+  note?: string;
+  trackingUpdated?: string;
 }
 interface Review {
   id: string; customer: string; avatar: string; rating: number;
@@ -56,6 +62,11 @@ interface SellerConvo {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const fmt = (n: number) => n.toLocaleString("vi-VN") + "đ";
+const normalizeText = (value: string) => value
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase()
+  .trim();
 const fmtShort = (n: number) =>
   n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + "tr" :
   n >= 1_000 ? (n / 1_000).toFixed(0) + "k" : String(n);
@@ -131,6 +142,29 @@ const INIT_ORDERS: Order[] = [
   { id:"ORD-004", customer:"Lê Thu Hương",       phone:"0967 567 890", address:"12 Cách Mạng Tháng 8, Q.3",          items:[{name:"Blazer Tweed Cổ Điển",size:"S",color:"Kem đen",qty:1,price:750000},{name:"Quần Wide Leg Kaki",size:"M",color:"Đen",qty:1,price:350000}],total:1100000, date:"02/07/2026", status:"completed" },
   { id:"ORD-005", customer:"Vũ Đình Long",       phone:"0978 678 901", address:"56 Võ Văn Tần, Q.3",                  items:[{name:"Áo Len Cổ Lọ Oversized",size:"L/XL",color:"Xám khói",qty:1,price:380000}],                                                          total:380000,  date:"01/07/2026", status:"cancelled" },
   { id:"ORD-006", customer:"Hoàng Thị Mai",      phone:"0989 789 012", address:"90 Pasteur, Q.1",                     items:[{name:"Quần Wide Leg Kaki",size:"M",color:"Xám",qty:1,price:350000}],                                                                       total:350000,  date:"30/06/2026", status:"completed" },
+];
+
+const INIT_BUYER_ORDERS: Order[] = [
+  {
+    id:"DECO-240701", customer:"Nguyễn Mai Anh", phone:"0901 234 567",
+    address:"123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
+    items:[{name:"Áo Linen Trắng Cổ V",size:"M",color:"Trắng",qty:1,price:285000}],
+    total:285000, date:"07/07/2026", status:"shipping", paymentMethod:"bank",
+    paymentStatus:"paid", trackingUpdated:"10:30, 10/07/2026"
+  },
+  {
+    id:"DECO-240630", customer:"Nguyễn Mai Anh", phone:"0901 234 567",
+    address:"123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
+    items:[{name:"Váy Midi Hoa Nhí Vintage",size:"S",color:"Xanh sage",qty:1,price:420000}],
+    total:420000, date:"30/06/2026", status:"completed", paymentMethod:"cod",
+    paymentStatus:"paid", trackingUpdated:"02/07/2026"
+  }
+];
+
+const VOUCHERS = [
+  { code:"BEST10", label:"Giảm 10% - tối đa 50.000đ", discount:(total: number) => Math.min(50000, Math.round(total * 0.1)) },
+  { code:"DECO30", label:"Giảm 30.000đ cho đơn từ 300.000đ", discount:(total: number) => total >= 300000 ? 30000 : 0 },
+  { code:"NONE", label:"Không sử dụng voucher", discount:() => 0 },
 ];
 
 const INIT_REVIEWS: Review[] = [
@@ -354,8 +388,8 @@ function ShopProfileView({ sid, allProducts, user, shopForm, liked, toggleLike, 
 
 // ─── Seller Dashboard (standalone for hooks) ──────────────────────────────────
 
-function SellerDashboard({ user, allProducts, extraProducts, setExtraProducts, shopForm, setShopForm, onBack }: {
-  user: AppUser; allProducts: Product[]; extraProducts: Product[];
+function SellerDashboard({ user, setExtraProducts, shopForm, setShopForm, onBack }: {
+  user: AppUser;
   setExtraProducts: React.Dispatch<React.SetStateAction<Product[]>>;
   shopForm: ShopForm; setShopForm: React.Dispatch<React.SetStateAction<ShopForm>>;
   onBack(): void;
@@ -385,7 +419,6 @@ function SellerDashboard({ user, allProducts, extraProducts, setExtraProducts, s
   const active    = managed.filter((p) => p.status === "active").length;
   const outOfSt   = managed.filter((p) => p.status === "out").length;
   const avgRating = reviews.length ? (reviews.reduce((a, r) => a + r.rating, 0) / reviews.length).toFixed(1) : "0";
-  const totalRev  = orders.filter((o) => o.status === "completed").reduce((a, o) => a + o.total, 0);
 
   const filteredP = managed.filter((p) => (prodTab === "all" || p.status === prodTab) && (!prodSearch || p.name.toLowerCase().includes(prodSearch.toLowerCase())));
   const filteredO = orders.filter((o) => orderFilter === "all" || o.status === orderFilter);
@@ -436,7 +469,7 @@ function SellerDashboard({ user, allProducts, extraProducts, setExtraProducts, s
       {/* ── Sidebar ── */}
       <aside className="w-56 shrink-0 bg-card border-r border-border flex flex-col overflow-y-auto">
         <div className="p-4 border-b border-border">
-          <p className="font-['Playfair_Display'] text-lg font-bold">VẢI</p>
+          <p className="font-['Playfair_Display'] text-lg font-bold">DECO</p>
           <p className="text-xs text-muted-foreground">Kênh người bán</p>
         </div>
         <div className="px-4 py-3 border-b border-border">
@@ -1100,7 +1133,12 @@ export default function App() {
   const [user, setUser]           = useState<AppUser | null>(null);
   const [showAuth, setShowAuth]   = useState(false);
   const [authMode, setAuthMode]   = useState<AuthMode>("login");
-  const [authForm, setAuthForm]   = useState({ name:"", email:"", password:"" });
+  const [authStep, setAuthStep]   = useState<AuthStep>("credentials");
+  const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
+  const [authForm, setAuthForm]   = useState({ name:"", email:"", phone:"", password:"", confirmPassword:"", otp:"" });
+  const [pendingAction, setPendingAction] = useState<"checkout" | "messages" | null>(null);
+  const [pendingConversation, setPendingConversation] = useState<{ shopId: string; name: string } | null>(null);
   const [searchQ, setSearchQ]     = useState("");
   const [searchIn, setSearchIn]   = useState("");
   const [liked, setLiked]         = useState<string[]>([]);
@@ -1113,7 +1151,13 @@ export default function App() {
   const [category, setCategory]   = useState("Tất cả");
   const [shopForm, setShopForm]   = useState<ShopForm>({ name:"", desc:"", phone:"", address:"" });
   const [showMenu, setShowMenu]   = useState(false);
-  const [payForm, setPayForm]     = useState({ name:"", phone:"", address:"", method:"cod" });
+  const [payForm, setPayForm]     = useState({ name:"", phone:"", address:"", method:"cod", voucher:"BEST10", note:"" });
+  const [payError, setPayError]   = useState("");
+  const [savedAddress, setSavedAddress] = useState({ name:"Nguyễn Mai Anh", phone:"0901 234 567", address:"123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM" });
+  const [buyerOrders, setBuyerOrders] = useState<Order[]>(INIT_BUYER_ORDERS);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [orderNotice, setOrderNotice] = useState("");
+  const [lastOrder, setLastOrder] = useState<Order | null>(null);
   const [extraP, setExtraP]       = useState<Product[]>([]);
   const [viewShop, setViewShop]   = useState<string | null>(null);
 
@@ -1122,7 +1166,13 @@ export default function App() {
 
   const allProducts  = [...BASE_PRODUCTS, ...extraP];
   const cartCount    = cart.reduce((a, c) => a + c.quantity, 0);
-  const cartTotal    = cart.reduce((a, c) => a + c.product.price * c.quantity, 0);
+  const selectedCart = cart.filter((item) => item.selected);
+  const selectedCount = selectedCart.reduce((a, c) => a + c.quantity, 0);
+  const cartTotal    = selectedCart.reduce((a, c) => a + c.product.price * c.quantity, 0);
+  const selectedVoucher = VOUCHERS.find((voucher) => voucher.code === payForm.voucher) || VOUCHERS[2];
+  const voucherDiscount = selectedVoucher.discount(cartTotal);
+  const shippingFee = cartTotal > 0 ? 30000 : 0;
+  const checkoutTotal = Math.max(0, cartTotal + shippingFee - voucherDiscount);
   const totalUnread  = buyConvos.reduce((a, c) => a + c.unread, 0);
   const filtered     = allProducts.filter((p) => category === "Tất cả" || p.category === category);
   const recommended  = allProducts.filter((p) => liked.some((id) => { const lp = allProducts.find((x) => x.id === id); return lp && (lp.category === p.category || lp.shopId === p.shopId) && p.id !== id; })).slice(0, 4);
@@ -1131,19 +1181,20 @@ export default function App() {
   const openProduct  = (p: Product) => { setSelProd(p); setSelSize(""); setSelColor(""); setView("product"); };
   const openShop     = (sid: string) => { setViewShop(sid); setView("shop-profile"); };
   const openConvo    = (shopId: string, name: string) => {
-    if (!user) { setShowAuth(true); return; }
+    if (!user) { setPendingAction("messages"); setPendingConversation({ shopId, name }); setShowAuth(true); return; }
     if (!buyConvos.find((c) => c.shopId === shopId)) setBuyConvos((prev) => [...prev, { shopId, shopName:name, shopAvatar: SHOP_AVATARS[shopId] || SHOP_AVATARS.s1, messages:[], unread:0 }]);
     setBuyConvos((prev) => prev.map((c) => c.shopId === shopId ? { ...c, unread:0 } : c));
     setActiveBC(shopId); setView("messages");
   };
-  const openMessages = () => { if (!user) { setShowAuth(true); return; } setActiveBC(buyConvos[0]?.shopId ?? null); setView("messages"); };
+  const openMessages = () => { if (!user) { setPendingAction("messages"); setShowAuth(true); return; } setActiveBC(buyConvos[0]?.shopId ?? null); setView("messages"); };
   const addToCart    = () => {
     if (!selProd || !selSize || !selColor) return;
-    setCart((prev) => { const ex = prev.find((i) => i.product.id === selProd.id && i.size === selSize && i.color === selColor); return ex ? prev.map((i) => i === ex ? { ...i, quantity: i.quantity + 1 } : i) : [...prev, { product: selProd, quantity:1, size: selSize, color: selColor }]; });
+    setCart((prev) => { const ex = prev.find((i) => i.product.id === selProd.id && i.size === selSize && i.color === selColor); return ex ? prev.map((i) => i === ex ? { ...i, quantity: i.quantity + 1, selected:true } : i) : [...prev, { product: selProd, quantity:1, size: selSize, color: selColor, selected:true }]; });
     setView("cart"); setCheckout("bag");
   };
   const updateQty    = (idx: number, d: number) => setCart((prev) => prev.map((item, i) => i === idx ? { ...item, quantity: Math.max(1, item.quantity + d) } : item));
   const removeItem   = (idx: number) => setCart((prev) => prev.filter((_, i) => i !== idx));
+  const toggleCartSelection = (idx: number) => setCart((prev) => prev.map((item, i) => i === idx ? { ...item, selected:!item.selected } : item));
   const sendMsg      = () => {
     if (!msgIn.trim() || !activeBC) return;
     const t = new Date().toLocaleTimeString("vi-VN", { hour:"2-digit", minute:"2-digit" });
@@ -1151,11 +1202,68 @@ export default function App() {
     setMsgIn("");
     setTimeout(() => { const r: BuyerMsg = { id:(Date.now()+1).toString(), from:"shop", text:"Cảm ơn bạn! Shop sẽ trả lời sớm nhất 🌸", time: new Date().toLocaleTimeString("vi-VN",{hour:"2-digit",minute:"2-digit"}) }; setBuyConvos((prev) => prev.map((c) => c.shopId === activeBC ? { ...c, messages:[...c.messages, r] } : c)); }, 1000);
   };
-  const doLogin = () => { setUser({ id:"u1", name: authForm.name || "Nguyễn Mai Anh", email: authForm.email || "maianh@email.com", hasShop:false }); setShowAuth(false); setAuthForm({ name:"", email:"", password:"" }); };
+  const prepareCheckout = () => {
+    const bestVoucher = VOUCHERS.slice(0, 2).reduce((best, current) => current.discount(cartTotal) > best.discount(cartTotal) ? current : best, VOUCHERS[0]);
+    setPayForm((prev) => ({ ...prev, name:prev.name || savedAddress.name, phone:prev.phone || savedAddress.phone, address:prev.address || savedAddress.address, voucher:bestVoucher.code }));
+    setPayError(""); setCheckout("payment"); setView("cart");
+  };
+
+  const beginCheckout = () => {
+    if (selectedCart.length === 0) return;
+    if (!user) { setPendingAction("checkout"); setShowAuth(true); return; }
+    prepareCheckout();
+  };
+
+  const submitAuthCredentials = () => {
+    setAuthError(""); setAuthNotice("");
+    const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authForm.email);
+    if (authMode === "register" && !authForm.name.trim()) return setAuthError("Vui lòng nhập họ và tên.");
+    if (!emailValid) return setAuthError("Email không đúng định dạng.");
+    if (authMode === "register" && !/^0\d{9}$/.test(authForm.phone)) return setAuthError("Số điện thoại phải gồm 10 chữ số và bắt đầu bằng 0.");
+    if (authForm.password.length < 6) return setAuthError("Mật khẩu phải có ít nhất 6 ký tự.");
+    if (authMode === "register" && authForm.password !== authForm.confirmPassword) return setAuthError("Hai mật khẩu không trùng nhau.");
+    setAuthStep("otp"); setAuthNotice("Mã OTP đã được gửi đến email của bạn.");
+  };
+
+  const verifyOtp = () => {
+    if (authForm.otp !== "123456") { setAuthError("OTP không đúng hoặc đã hết hạn."); return; }
+    if (authMode === "register") {
+      setAuthMode("login"); setAuthStep("credentials"); setAuthNotice("Tạo tài khoản thành công. Vui lòng đăng nhập."); setAuthError("");
+      setAuthForm((prev) => ({ ...prev, name:"", phone:"", password:"", confirmPassword:"", otp:"" })); return;
+    }
+    setUser({ id:"u1", name:"Nguyễn Mai Anh", email:authForm.email, hasShop:false });
+    setShowAuth(false); setAuthStep("credentials"); setAuthError(""); setAuthNotice("");
+    setAuthForm({ name:"", email:"", phone:"", password:"", confirmPassword:"", otp:"" });
+    if (pendingAction === "checkout") prepareCheckout();
+    if (pendingAction === "messages") {
+      if (pendingConversation && !buyConvos.find((c) => c.shopId === pendingConversation.shopId)) {
+        setBuyConvos((prev) => [...prev, { shopId:pendingConversation.shopId, shopName:pendingConversation.name, shopAvatar:SHOP_AVATARS[pendingConversation.shopId] || SHOP_AVATARS.s1, messages:[], unread:0 }]);
+      }
+      setActiveBC(pendingConversation?.shopId || buyConvos[0]?.shopId || null); setView("messages");
+    }
+    setPendingAction(null); setPendingConversation(null);
+  };
+
+  const placeOrder = () => {
+    setPayError("");
+    const normalizedPhone = payForm.phone.replace(/\D/g, "");
+    if (!payForm.name.trim() || !/^0\d{9}$/.test(normalizedPhone) || !payForm.address.trim()) {
+      setPayError("Vui lòng nhập đầy đủ họ tên, số điện thoại hợp lệ và địa chỉ giao hàng."); return;
+    }
+    const paymentMethod = payForm.method === "transfer" ? "bank" : payForm.method === "momo" ? "wallet" : "cod";
+    const order: Order = {
+      id:`DECO-${String(buyerOrders.length + 1).padStart(6, "0")}`, customer:payForm.name, phone:normalizedPhone, address:payForm.address,
+      items:selectedCart.map((item) => ({ name:item.product.name, size:item.size, color:item.color, qty:item.quantity, price:item.product.price })),
+      total:checkoutTotal, date:new Date().toLocaleDateString("vi-VN"), status:"pending", paymentMethod,
+      paymentStatus:paymentMethod === "cod" ? "pending" : "paid", note:payForm.note, trackingUpdated:"Vừa xong",
+    };
+    setBuyerOrders((prev) => [order, ...prev]); setLastOrder(order); setSavedAddress({ name:payForm.name, phone:payForm.phone, address:payForm.address });
+    setCart((prev) => prev.filter((item) => !item.selected)); setCheckout("success");
+  };
 
   // ── Full-screen seller dashboard ──
   if (view === "seller-dashboard" && user?.hasShop) {
-    return <SellerDashboard user={user} allProducts={allProducts} extraProducts={extraP} setExtraProducts={setExtraP} shopForm={shopForm} setShopForm={setShopForm} onBack={() => setView("home")} />;
+    return <SellerDashboard user={user} setExtraProducts={setExtraP} shopForm={shopForm} setShopForm={setShopForm} onBack={() => setView("home")} />;
   }
 
   const curBC = buyConvos.find((c) => c.shopId === activeBC);
@@ -1168,20 +1276,35 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-card w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden">
             <div className="bg-secondary p-6 text-center relative">
-              <button onClick={() => setShowAuth(false)} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-muted transition-colors"><X size={15} className="text-muted-foreground" /></button>
-              <p className="font-['Playfair_Display'] text-2xl font-semibold">VẢI</p>
+              <button onClick={() => { setShowAuth(false); setAuthStep("credentials"); setAuthError(""); setAuthNotice(""); setPendingAction(null); setPendingConversation(null); }} className="absolute top-3 right-3 p-1.5 rounded-full hover:bg-muted transition-colors"><X size={15} className="text-muted-foreground" /></button>
+              <p className="font-['Playfair_Display'] text-2xl font-semibold">DECO</p>
               <p className="text-sm text-muted-foreground mt-1">Thời trang Việt Nam</p>
             </div>
             <div className="p-6">
-              <div className="flex rounded-lg bg-muted p-0.5 mb-5">
-                {(["login","register"] as AuthMode[]).map((m) => (
-                  <button key={m} onClick={() => setAuthMode(m)} className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-all ${authMode === m ? "bg-white shadow-sm text-foreground" : "text-muted-foreground"}`}>{m === "login" ? "Đăng nhập" : "Đăng ký"}</button>
-                ))}
-              </div>
-              {authMode === "register" && <input placeholder="Họ và tên" value={authForm.name} onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} className="w-full mb-3 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />}
-              <input placeholder="Email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} className="w-full mb-3 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
-              <input type="password" placeholder="Mật khẩu" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} className="w-full mb-4 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
-              <button onClick={doLogin} className="w-full py-2.5 bg-[#C05A2D] text-white rounded-lg text-sm font-medium hover:bg-[#A84D25] transition-colors">{authMode === "login" ? "Đăng nhập" : "Tạo tài khoản"}</button>
+              {authStep === "credentials" ? <>
+                <div className="flex rounded-lg bg-muted p-0.5 mb-5">
+                  {(["login","register"] as AuthMode[]).map((m) => (
+                    <button key={m} onClick={() => { setAuthMode(m); setAuthError(""); setAuthNotice(""); }} className={`flex-1 py-1.5 rounded-md text-sm font-medium transition-all ${authMode === m ? "bg-white shadow-sm text-foreground" : "text-muted-foreground"}`}>{m === "login" ? "Đăng nhập" : "Đăng ký"}</button>
+                  ))}
+                </div>
+                {authMode === "register" && <>
+                  <input placeholder="Họ và tên" value={authForm.name} onChange={(e) => setAuthForm({ ...authForm, name:e.target.value })} className="w-full mb-3 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
+                  <input inputMode="tel" placeholder="Số điện thoại" value={authForm.phone} onChange={(e) => setAuthForm({ ...authForm, phone:e.target.value })} className="w-full mb-3 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
+                </>}
+                <input type="email" placeholder="Email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email:e.target.value })} className="w-full mb-3 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
+                <input type="password" placeholder={authMode === "register" ? "Tạo mật khẩu" : "Mật khẩu"} value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password:e.target.value })} className="w-full mb-3 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
+                {authMode === "register" && <input type="password" placeholder="Nhập lại mật khẩu" value={authForm.confirmPassword} onChange={(e) => setAuthForm({ ...authForm, confirmPassword:e.target.value })} className="w-full mb-3 px-3.5 py-2.5 bg-muted rounded-lg text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />}
+                {authNotice && <p className="mb-3 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">{authNotice}</p>}
+                {authError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{authError}</p>}
+                <button onClick={submitAuthCredentials} className="w-full py-2.5 bg-[#C05A2D] text-white rounded-lg text-sm font-medium hover:bg-[#A84D25] transition-colors">Tiếp tục</button>
+              </> : <>
+                <button onClick={() => { setAuthStep("credentials"); setAuthError(""); }} className="flex items-center gap-1 text-xs text-muted-foreground mb-4"><ArrowLeft size={13} /> Quay lại</button>
+                <div className="text-center mb-5"><ShieldCheck size={34} className="mx-auto text-[#C05A2D] mb-2" /><h3 className="font-semibold">Xác thực Email</h3><p className="text-xs text-muted-foreground mt-1">Nhập mã gồm 6 chữ số đã gửi đến {authForm.email}</p></div>
+                <input inputMode="numeric" maxLength={6} placeholder="Nhập OTP" value={authForm.otp} onChange={(e) => setAuthForm({ ...authForm, otp:e.target.value.replace(/\D/g, "") })} className="w-full mb-3 px-3.5 py-3 bg-muted rounded-lg text-center tracking-[0.5em] font-semibold outline-none focus:ring-2 ring-[#C05A2D]/30" />
+                {authNotice && <p className="mb-3 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">{authNotice}</p>}
+                {authError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{authError}</p>}
+                <button onClick={verifyOtp} className="w-full py-2.5 bg-[#C05A2D] text-white rounded-lg text-sm font-medium hover:bg-[#A84D25] transition-colors">Xác nhận OTP</button>
+              </>}
             </div>
           </div>
         </div>
@@ -1191,7 +1314,7 @@ export default function App() {
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-md border-b border-border">
         <div className="max-w-6xl mx-auto px-4">
           <div className="flex items-center h-14 gap-3">
-            <button onClick={() => setView("home")} className="font-['Playfair_Display'] text-xl font-bold tracking-wider mr-2 shrink-0">VẢI</button>
+            <button onClick={() => setView("home")} className="font-['Playfair_Display'] text-xl font-bold tracking-wider mr-2 shrink-0">DECO</button>
             <div className="flex-1 relative max-w-lg">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input value={searchIn} onChange={(e) => setSearchIn(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && searchIn.trim()) { setSearchQ(searchIn.trim()); setCategory("Tất cả"); setView("search"); } }} placeholder="Tìm áo, váy, quần..." className="w-full pl-9 pr-4 py-1.5 bg-secondary rounded-full text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 placeholder:text-muted-foreground" />
@@ -1217,12 +1340,8 @@ export default function App() {
                         <p className="text-sm font-medium">{user.name}</p>
                         <p className="text-xs text-muted-foreground">{user.email}</p>
                       </div>
-                      {!user.hasShop
-                        ? <button onClick={() => { setView("shop-register"); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"><Store size={14} /> Mở shop của bạn</button>
-                        : <>
-                            <button onClick={() => { setView("seller-dashboard"); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"><BarChart2 size={14} /> Quản lý shop</button>
-                            <button onClick={() => { openShop(user.shopId!); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"><Store size={14} /> Trang shop của tôi</button>
-                          </>}
+                      <button onClick={() => { setSelectedOrderId(null); setView("orders"); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"><Package size={14} /> Đơn mua của tôi</button>
+                      <button onClick={() => { openMessages(); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors"><MessageCircle size={14} /> Tin nhắn</button>
                       <button onClick={() => { setUser(null); setShowMenu(false); }} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-destructive hover:bg-muted transition-colors"><LogOut size={14} /> Đăng xuất</button>
                     </div>
                   )}
@@ -1269,16 +1388,17 @@ export default function App() {
 
         {/* ── Search ── */}
         {view === "search" && (() => {
-          const res = allProducts.filter((p) => p.name.toLowerCase().includes(searchQ.toLowerCase()) || p.shopName.toLowerCase().includes(searchQ.toLowerCase()) || p.tags.some((t) => t.toLowerCase().includes(searchQ.toLowerCase())));
+          const normalizedQuery = normalizeText(searchQ);
+          const res = normalizedQuery ? allProducts.filter((p) => normalizeText(`${p.name} ${p.description}`).includes(normalizedQuery)) : [];
           return (
             <div className="max-w-6xl mx-auto px-4 py-6">
               <div className="flex items-center gap-3 mb-5">
                 <button onClick={() => setView("home")} className="p-1.5 hover:bg-secondary rounded-full transition-colors"><ArrowLeft size={18} /></button>
-                <h2 className="font-['Playfair_Display'] text-lg font-semibold">Kết quả cho "{searchQ}"</h2>
+                <div><h2 className="font-['Playfair_Display'] text-lg font-semibold">{searchQ ? `Kết quả cho "${searchQ}"` : "Tìm kiếm sản phẩm"}</h2><p className="text-xs text-muted-foreground mt-0.5">Tìm theo tên hoặc mô tả sản phẩm</p></div>
                 <span className="text-sm text-muted-foreground ml-auto">{res.length} sản phẩm</span>
               </div>
               {res.length === 0
-                ? <div className="text-center py-20 text-muted-foreground"><Search size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">Không tìm thấy sản phẩm</p></div>
+                ? <div className="text-center py-20 text-muted-foreground"><Search size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">{searchQ ? "Không tìm thấy sản phẩm phù hợp" : "Nhập từ khóa trên thanh tìm kiếm"}</p>{searchQ && <p className="text-sm mt-1">Hãy thử từ khóa ngắn hoặc tên sản phẩm khác.</p>}</div>
                 : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{res.map((p) => <ProductCard key={p.id} product={p} liked={liked.includes(p.id)} onLike={toggleLike} onClick={openProduct} />)}</div>}
             </div>
           );
@@ -1336,36 +1456,31 @@ export default function App() {
         {/* ── Cart ── */}
         {view === "cart" && (() => {
           if (checkout === "success") return (
-            <div className="max-w-md mx-auto px-4 py-20 text-center">
+            <div className="max-w-lg mx-auto px-4 py-16 text-center">
               <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-5"><Check size={36} className="text-green-600" /></div>
               <h2 className="font-['Playfair_Display'] text-2xl font-semibold mb-2">Đặt hàng thành công!</h2>
-              <p className="text-muted-foreground mb-8">Đơn hàng sẽ được giao trong 2-4 ngày làm việc 🌸</p>
-              <button onClick={() => { setCart([]); setCheckout("bag"); setView("home"); }} className="px-6 py-2.5 bg-[#C05A2D] text-white rounded-full text-sm font-medium hover:bg-[#A84D25] transition-colors">Tiếp tục mua sắm</button>
+              <p className="text-muted-foreground mb-5">Mã đơn hàng <span className="font-mono font-semibold text-foreground">{lastOrder?.id}</span></p>
+              <div className="bg-secondary rounded-2xl p-4 text-left mb-6 space-y-2 text-sm">
+                <div className="flex justify-between"><span className="text-muted-foreground">Phương thức</span><span className="font-medium">{lastOrder?.paymentMethod === "cod" ? "Thanh toán khi nhận hàng" : lastOrder?.paymentMethod === "bank" ? "Ngân hàng" : "Ví điện tử"}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Thanh toán</span><span className={lastOrder?.paymentStatus === "paid" ? "text-green-600 font-medium" : "text-amber-600 font-medium"}>{lastOrder?.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Tổng tiền</span><span className="font-semibold text-[#C05A2D]">{fmt(lastOrder?.total || 0)}</span></div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 justify-center"><button onClick={() => { setSelectedOrderId(lastOrder?.id || null); setCheckout("bag"); setView("orders"); }} className="px-6 py-2.5 border border-border rounded-full text-sm font-medium hover:bg-secondary">Theo dõi đơn hàng</button><button onClick={() => { setCheckout("bag"); setView("home"); }} className="px-6 py-2.5 bg-[#C05A2D] text-white rounded-full text-sm font-medium hover:bg-[#A84D25] transition-colors">Tiếp tục mua sắm</button></div>
             </div>
           );
           if (checkout === "payment") return (
-            <div className="max-w-lg mx-auto px-4 py-6">
+            <div className="max-w-5xl mx-auto px-4 py-6">
               <button onClick={() => setCheckout("bag")} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-5 transition-colors"><ArrowLeft size={15} /> Giỏ hàng</button>
-              <h2 className="font-['Playfair_Display'] text-xl font-semibold mb-6">Thông tin giao hàng</h2>
-              <div className="space-y-3 mb-5">
-                <input placeholder="Họ và tên" value={payForm.name} onChange={(e) => setPayForm({ ...payForm, name: e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
-                <input placeholder="Số điện thoại" value={payForm.phone} onChange={(e) => setPayForm({ ...payForm, phone: e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />
-                <textarea placeholder="Địa chỉ giao hàng" value={payForm.address} onChange={(e) => setPayForm({ ...payForm, address: e.target.value })} rows={2} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 resize-none" />
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-6"><span className="w-6 h-6 rounded-full bg-green-600 text-white flex items-center justify-center"><Check size={12}/></span><span>Chọn sản phẩm</span><span className="h-px w-8 bg-border"/><span className="w-6 h-6 rounded-full bg-[#C05A2D] text-white flex items-center justify-center">2</span><span>Thanh toán</span><span className="h-px w-8 bg-border"/><span className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">3</span><span>Hoàn tất</span></div>
+              <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-6">
+                <div className="space-y-5">
+                  <section className="bg-card border border-border rounded-2xl p-5"><div className="flex items-center justify-between mb-4"><h2 className="font-['Playfair_Display'] text-lg font-semibold">Địa chỉ giao hàng</h2><button onClick={() => setPayForm({ ...payForm, ...savedAddress })} className="text-xs text-[#C05A2D] font-medium">Dùng địa chỉ đã lưu</button></div><div className="space-y-3"><input placeholder="Họ và tên" value={payForm.name} onChange={(e) => setPayForm({ ...payForm, name:e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30"/><input inputMode="tel" placeholder="Số điện thoại" value={payForm.phone} onChange={(e) => setPayForm({ ...payForm, phone:e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30"/><textarea placeholder="Địa chỉ giao hàng" value={payForm.address} onChange={(e) => setPayForm({ ...payForm, address:e.target.value })} rows={3} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 resize-none"/></div></section>
+                  <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3 flex items-center gap-2"><TicketPercent size={17} className="text-[#C05A2D]"/>Voucher</h3><div className="space-y-2">{VOUCHERS.map((voucher) => <button key={voucher.code} onClick={() => setPayForm({ ...payForm, voucher:voucher.code })} className={`w-full flex items-center justify-between rounded-xl border px-4 py-3 text-left ${payForm.voucher === voucher.code ? "border-[#C05A2D] bg-[#C05A2D]/5" : "border-border"}`}><span><span className="block text-sm font-medium">{voucher.code === "BEST10" ? "Voucher tốt nhất" : voucher.code}</span><span className="text-xs text-muted-foreground">{voucher.label}</span></span>{payForm.voucher === voucher.code && <Check size={16} className="text-[#C05A2D]"/>}</button>)}</div></section>
+                  <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Ghi chú với shop</h3><textarea placeholder="Ví dụ: giao giờ hành chính, kiểm tra kỹ sản phẩm..." value={payForm.note} onChange={(e) => setPayForm({ ...payForm, note:e.target.value })} rows={3} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 resize-none"/></section>
+                  <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3 flex items-center gap-2"><CreditCard size={17}/>Phương thức thanh toán</h3><div className="space-y-2">{[["cod","Thanh toán khi nhận hàng (COD)","Thanh toán cho đơn vị vận chuyển"],["transfer","Ngân hàng","Thanh toán trực tuyến qua ngân hàng"],["momo","Ví điện tử","Thanh toán bằng ví điện tử"]].map(([val,label,desc]) => <button key={val} onClick={() => setPayForm({ ...payForm, method:val })} className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl border text-left transition-all ${payForm.method === val ? "border-[#C05A2D] bg-[#C05A2D]/5" : "border-border hover:border-foreground/30"}`}><div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${payForm.method === val ? "border-[#C05A2D]" : "border-muted-foreground"}`}>{payForm.method === val && <div className="w-2 h-2 rounded-full bg-[#C05A2D]"/>}</div><span><span className="block text-sm font-medium">{label}</span><span className="text-xs text-muted-foreground">{desc}</span></span></button>)}</div></section>
+                </div>
+                <aside><div className="bg-card border border-border rounded-2xl p-5 sticky top-20"><h3 className="font-['Playfair_Display'] font-semibold mb-4">Đơn hàng ({selectedCount} sản phẩm)</h3><div className="space-y-3 max-h-52 overflow-y-auto mb-4">{selectedCart.map((item) => <div key={`${item.product.id}-${item.size}-${item.color}`} className="flex gap-3"><img src={item.product.image} className="w-12 h-14 object-cover rounded-lg" alt=""/><div className="flex-1 min-w-0"><p className="text-xs font-medium truncate">{item.product.name}</p><p className="text-[11px] text-muted-foreground">{item.size} · {item.color} · x{item.quantity}</p></div><span className="text-xs font-medium">{fmt(item.product.price * item.quantity)}</span></div>)}</div><div className="border-t border-border pt-3 space-y-2 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Tạm tính</span><span>{fmt(cartTotal)}</span></div><div className="flex justify-between"><span className="text-muted-foreground">Phí vận chuyển</span><span>{fmt(shippingFee)}</span></div><div className="flex justify-between text-green-600"><span>Voucher</span><span>-{fmt(voucherDiscount)}</span></div><div className="flex justify-between font-semibold text-base pt-2 border-t border-border"><span>Tổng thanh toán</span><span className="text-[#C05A2D]">{fmt(checkoutTotal)}</span></div></div>{payError && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{payError}</p>}<button onClick={placeOrder} className="w-full mt-5 py-3 bg-[#C05A2D] text-white rounded-xl text-sm font-medium hover:bg-[#A84D25] transition-colors">Đặt hàng · {fmt(checkoutTotal)}</button><p className="text-[11px] text-muted-foreground text-center mt-3">Bằng việc đặt hàng, bạn xác nhận thông tin trên là chính xác.</p></div></aside>
               </div>
-              <p className="text-sm font-medium mb-3">Phương thức thanh toán</p>
-              <div className="space-y-2 mb-6">
-                {[["cod","Thanh toán khi nhận hàng (COD)"],["transfer","Chuyển khoản ngân hàng"],["momo","Ví MoMo"]].map(([val,label]) => (
-                  <button key={val} onClick={() => setPayForm({ ...payForm, method: val })} className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl border text-sm transition-all ${payForm.method === val ? "border-[#C05A2D] bg-[#C05A2D]/5" : "border-border hover:border-foreground/30"}`}>
-                    <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${payForm.method === val ? "border-[#C05A2D]" : "border-muted-foreground"}`}>{payForm.method === val && <div className="w-2 h-2 rounded-full bg-[#C05A2D]" />}</div>{label}
-                  </button>
-                ))}
-              </div>
-              <div className="bg-secondary rounded-xl p-4 mb-5">
-                <div className="flex justify-between text-sm mb-1.5"><span className="text-muted-foreground">Tạm tính</span><span>{fmt(cartTotal)}</span></div>
-                <div className="flex justify-between text-sm mb-3"><span className="text-muted-foreground">Vận chuyển</span><span className="text-green-600">Miễn phí</span></div>
-                <div className="flex justify-between font-semibold"><span>Tổng cộng</span><span className="text-[#C05A2D] text-lg">{fmt(cartTotal)}</span></div>
-              </div>
-              <button onClick={() => setCheckout("success")} className="w-full py-3 bg-[#C05A2D] text-white rounded-xl text-sm font-medium hover:bg-[#A84D25] transition-colors">Đặt hàng — {fmt(cartTotal)}</button>
             </div>
           );
           return (
@@ -1379,7 +1494,8 @@ export default function App() {
                 : <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="md:col-span-2 space-y-3">
                       {cart.map((item, idx) => (
-                        <div key={idx} className="flex gap-4 bg-card p-4 rounded-xl border border-border">
+                        <div key={idx} className={`flex gap-3 bg-card p-4 rounded-xl border transition-colors ${item.selected ? "border-[#C05A2D]/40" : "border-border opacity-75"}`}>
+                          <button onClick={() => toggleCartSelection(idx)} aria-label={item.selected ? "Bỏ chọn sản phẩm" : "Chọn sản phẩm"} className={`mt-8 w-5 h-5 rounded border shrink-0 flex items-center justify-center ${item.selected ? "bg-[#C05A2D] border-[#C05A2D] text-white" : "border-muted-foreground"}`}>{item.selected && <Check size={13}/>}</button>
                           <img src={item.product.image} alt={item.product.name} className="w-20 h-24 object-cover rounded-lg bg-secondary shrink-0" />
                           <div className="flex-1 min-w-0">
                             <p className="text-xs text-muted-foreground">{item.product.shopName}</p>
@@ -1402,18 +1518,27 @@ export default function App() {
                       <div className="bg-card border border-border rounded-xl p-5 sticky top-20">
                         <h3 className="font-['Playfair_Display'] font-semibold mb-4">Tóm tắt đơn hàng</h3>
                         <div className="space-y-2 mb-4">
-                          {cart.map((item, idx) => <div key={idx} className="flex justify-between text-sm"><span className="text-muted-foreground line-clamp-1 flex-1 mr-2">{item.product.name} ×{item.quantity}</span><span className="shrink-0">{fmt(item.product.price * item.quantity)}</span></div>)}
+                          {selectedCart.length ? selectedCart.map((item, idx) => <div key={idx} className="flex justify-between text-sm"><span className="text-muted-foreground line-clamp-1 flex-1 mr-2">{item.product.name} ×{item.quantity}</span><span className="shrink-0">{fmt(item.product.price * item.quantity)}</span></div>) : <p className="text-sm text-muted-foreground">Chưa chọn sản phẩm nào.</p>}
                         </div>
                         <div className="border-t border-border pt-3 mb-4">
-                          <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Vận chuyển</span><span className="text-green-600 font-medium">Miễn phí</span></div>
-                          <div className="flex justify-between font-semibold mt-2"><span>Tổng cộng</span><span className="text-[#C05A2D]">{fmt(cartTotal)}</span></div>
+                          <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Đã chọn</span><span>{selectedCount} sản phẩm</span></div>
+                          <div className="flex justify-between font-semibold mt-2"><span>Tạm tính</span><span className="text-[#C05A2D]">{fmt(cartTotal)}</span></div>
                         </div>
-                        <button onClick={() => { if (!user) { setShowAuth(true); return; } setCheckout("payment"); }} className="w-full py-3 bg-[#C05A2D] text-white rounded-xl text-sm font-medium hover:bg-[#A84D25] transition-colors">Tiến hành thanh toán</button>
+                        <button onClick={beginCheckout} disabled={selectedCart.length === 0} className={`w-full py-3 rounded-xl text-sm font-medium transition-colors ${selectedCart.length ? "bg-[#C05A2D] text-white hover:bg-[#A84D25]" : "bg-muted text-muted-foreground cursor-not-allowed"}`}>{selectedCart.length ? `Mua hàng (${selectedCount})` : "Chọn sản phẩm để mua"}</button>
                       </div>
                     </div>
                   </div>}
             </div>
           );
+        })()}
+
+        {/* ── Buyer Order Tracking ── */}
+        {view === "orders" && (() => {
+          const order = buyerOrders.find((item) => item.id === selectedOrderId);
+          if (!order) return <div className="max-w-5xl mx-auto px-4 py-6"><div className="flex items-center justify-between mb-6"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn mua của tôi</h2><p className="text-sm text-muted-foreground">Theo dõi tình trạng xử lý và giao hàng</p></div><button onClick={() => setView("home")} className="text-sm text-muted-foreground">Tiếp tục mua sắm</button></div><div className="space-y-3">{buyerOrders.map((item) => <button key={item.id} onClick={() => { setSelectedOrderId(item.id); setOrderNotice(""); }} className="w-full bg-card border border-border rounded-2xl p-4 text-left hover:shadow-sm transition-shadow"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><div><span className="font-mono text-sm font-semibold">{item.id}</span><span className="text-xs text-muted-foreground ml-2">{item.date}</span></div><span className={`px-2.5 py-1 rounded-full text-xs font-medium ${ORDER_STATUS[item.status].cls}`}>{ORDER_STATUS[item.status].label}</span></div><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center"><Package size={20} className="text-[#C05A2D]"/></div><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{item.items.map((product) => product.name).join(", ")}</p><p className="text-xs text-muted-foreground">{item.items.reduce((sum, product) => sum + product.qty, 0)} sản phẩm · {item.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</p></div><span className="font-semibold text-[#C05A2D]">{fmt(item.total)}</span><ChevronRight size={16} className="text-muted-foreground"/></div></button>)}</div></div>;
+          const steps: OrderStatus[] = ["pending","preparing","shipping","completed"];
+          const activeIndex = steps.indexOf(order.status);
+          return <div className="max-w-5xl mx-auto px-4 py-6"><button onClick={() => { setSelectedOrderId(null); setOrderNotice(""); }} className="flex items-center gap-1.5 text-sm text-muted-foreground mb-5"><ArrowLeft size={15}/>Danh sách đơn hàng</button><div className="flex flex-wrap items-start justify-between gap-3 mb-5"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn hàng {order.id}</h2><p className="text-sm text-muted-foreground">Cập nhật gần nhất: {order.trackingUpdated || order.date}</p></div><span className={`px-3 py-1.5 rounded-full text-xs font-medium ${ORDER_STATUS[order.status].cls}`}>{ORDER_STATUS[order.status].label}</span></div>{orderNotice && <div className="mb-4 rounded-xl bg-green-50 px-4 py-3 text-sm text-green-700">{orderNotice}</div>}<div className="grid grid-cols-1 lg:grid-cols-[1.4fr_0.6fr] gap-5"><div className="space-y-5"><section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-5">Tiến độ giao hàng</h3>{order.status === "cancelled" ? <div className="rounded-xl bg-gray-50 p-4 text-sm text-gray-600">Đơn hàng đã được hủy và không tiếp tục vận chuyển.</div> : <div className="space-y-0">{steps.map((step, index) => <div key={step} className="flex gap-4"><div className="flex flex-col items-center"><div className={`w-8 h-8 rounded-full flex items-center justify-center ${index <= activeIndex ? "bg-[#C05A2D] text-white" : "bg-muted text-muted-foreground"}`}>{index < activeIndex ? <Check size={14}/> : index + 1}</div>{index < steps.length - 1 && <div className={`w-0.5 h-10 ${index < activeIndex ? "bg-[#C05A2D]" : "bg-border"}`}/>}</div><div className="pt-1"><p className={`text-sm font-medium ${index <= activeIndex ? "text-foreground" : "text-muted-foreground"}`}>{ORDER_STATUS[step].label}</p>{index === activeIndex && <p className="text-xs text-muted-foreground mt-0.5">Trạng thái hiện tại của đơn hàng</p>}</div></div>)}</div>}</section>{order.status === "shipping" && <section className="bg-card border border-border rounded-2xl overflow-hidden"><div className="h-44 bg-[radial-gradient(circle_at_30%_30%,#dbeafe,transparent_35%),linear-gradient(135deg,#f0fdf4,#eff6ff)] flex items-center justify-center"><div className="text-center"><MapPin size={30} className="mx-auto text-[#C05A2D] mb-2"/><p className="text-sm font-medium">Vị trí GPS tạm thời chưa khả dụng</p><p className="text-xs text-muted-foreground mt-1">Hiển thị trạng thái và thời gian cập nhật gần nhất</p></div></div></section>}<section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Sản phẩm</h3>{order.items.map((item, index) => <div key={index} className="flex justify-between gap-3 py-3 border-b border-border last:border-0"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.size} · {item.color} · x{item.qty}</p></div><span className="text-sm">{fmt(item.price * item.qty)}</span></div>)}</section></div><aside className="space-y-4"><section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Thông tin nhận hàng</h3><div className="space-y-2 text-sm"><p>{order.customer} · {order.phone}</p><p className="text-muted-foreground leading-relaxed">{order.address}</p>{order.note && <p className="text-muted-foreground">Ghi chú: {order.note}</p>}</div></section><section className="bg-card border border-border rounded-2xl p-5"><div className="flex justify-between text-sm mb-2"><span className="text-muted-foreground">Thanh toán</span><span>{order.paymentMethod === "cod" ? "COD" : order.paymentMethod === "bank" ? "Ngân hàng" : "Ví điện tử"}</span></div><div className="flex justify-between text-sm mb-3"><span className="text-muted-foreground">Trạng thái</span><span className={order.paymentStatus === "paid" ? "text-green-600" : "text-amber-600"}>{order.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</span></div><div className="flex justify-between font-semibold border-t border-border pt-3"><span>Tổng cộng</span><span className="text-[#C05A2D]">{fmt(order.total)}</span></div></section>{order.status === "pending" && <button onClick={() => { setBuyerOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, status:"cancelled" } : item)); setOrderNotice("Yêu cầu hủy đơn đã được ghi nhận."); }} className="w-full py-2.5 border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50">Hủy đơn hàng</button>}{order.status === "shipping" && <button onClick={() => { setBuyerOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, status:"completed", paymentStatus:"paid" } : item)); setOrderNotice("Đã xác nhận nhận hàng thành công."); }} className="w-full py-2.5 bg-[#C05A2D] text-white rounded-xl text-sm font-medium">Đã nhận được hàng</button>}{order.status === "completed" && <button onClick={() => setOrderNotice("Yêu cầu hoàn hàng đã được ghi nhận và đang chờ kiểm tra điều kiện.")} className="w-full py-2.5 border border-border rounded-xl text-sm font-medium flex items-center justify-center gap-2"><RotateCcw size={14}/>Yêu cầu hoàn hàng</button>}</aside></div></div>;
         })()}
 
         {/* ── Messages (buyer) ── */}
@@ -1475,15 +1600,15 @@ export default function App() {
               <div className="text-center mb-6">
                 <div className="w-14 h-14 bg-[#C05A2D]/10 rounded-2xl flex items-center justify-center mx-auto mb-3"><Store size={24} className="text-[#C05A2D]" /></div>
                 <h2 className="font-['Playfair_Display'] text-xl font-semibold">Mở shop của bạn</h2>
-                <p className="text-sm text-muted-foreground mt-1">Bắt đầu bán hàng trên VẢI ngay hôm nay</p>
+                <p className="text-sm text-muted-foreground mt-1">Bắt đầu bán hàng trên DECO ngay hôm nay</p>
               </div>
               <div className="space-y-3 mb-5">
-                {[{ k:"name", l:"Tên shop *", p:"VD: Bông Studio" },{ k:"desc", l:"Mô tả shop *", p:"Phong cách thời trang...", ta:true },{ k:"phone", l:"Số điện thoại *", p:"0901 234 567" },{ k:"address", l:"Địa chỉ kho hàng", p:"Địa chỉ lấy hàng" }].map(({ k,l,p,ta }) => (
+                {([{ k:"name", l:"Tên shop *", p:"VD: Bông Studio" },{ k:"desc", l:"Mô tả shop *", p:"Phong cách thời trang...", ta:true },{ k:"phone", l:"Số điện thoại *", p:"0901 234 567" },{ k:"address", l:"Địa chỉ kho hàng", p:"Địa chỉ lấy hàng" }] as Array<{ k:keyof ShopForm; l:string; p:string; ta?:boolean }>).map(({ k,l,p,ta }) => (
                   <div key={k}>
                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 block">{l}</label>
                     {ta
-                      ? <textarea placeholder={p} value={(shopForm as any)[k]} onChange={(e) => setShopForm({ ...shopForm, [k]: e.target.value })} rows={2} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 resize-none" />
-                      : <input placeholder={p} value={(shopForm as any)[k]} onChange={(e) => setShopForm({ ...shopForm, [k]: e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />}
+                      ? <textarea placeholder={p} value={shopForm[k]} onChange={(e) => setShopForm({ ...shopForm, [k]: e.target.value })} rows={2} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 resize-none" />
+                      : <input placeholder={p} value={shopForm[k]} onChange={(e) => setShopForm({ ...shopForm, [k]: e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30" />}
                   </div>
                 ))}
               </div>

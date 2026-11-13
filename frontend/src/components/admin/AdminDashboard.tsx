@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -24,6 +24,7 @@ import {
 import { BASE_PRODUCTS } from "../../data/mockData";
 import type { Product } from "../../types";
 import { formatCurrency } from "../../utils/format";
+import { completeOrder, databaseApiEnabled, getAdminOrders, updateOrderStatus } from "../../services/decoApi";
 
 type AdminSection = "overview" | "products" | "attributes" | "orders" | "history";
 type ProductStatus = "active" | "hidden";
@@ -56,23 +57,21 @@ const adminProducts: AdminProduct[] = BASE_PRODUCTS.map((product, index) => ({
   ...product,
   sku: `DECO-${String(index + 1).padStart(3, "0")}`,
   status: index === 7 ? "hidden" : "active",
-  totalStock: [42, 18, 7, 31, 12, 24, 3, 0][index],
-  variantCount: product.sizes.length * Math.min(product.colors.length, 3),
+  totalStock: product.variants.reduce((total, variant) => total + variant.stock, 0),
+  variantCount: product.variants.length,
 }));
 
 const buildVariants = (product: AdminProduct): Variant[] =>
-  product.colors.flatMap((color, colorIndex) =>
-    product.sizes.map((size, sizeIndex) => ({
-      id: `${product.id}-${colorIndex}-${sizeIndex}`,
-      productId: product.id,
-      size,
-      color,
-      colorHex: COLOR_HEX[color] || "#B48A78",
-      sku: `${product.sku}-${colorIndex + 1}-${size.replaceAll("/", "")}`.toUpperCase(),
-      stock: (colorIndex * 7 + sizeIndex * 3 + product.id.length) % 14,
-      active: true,
-    })),
-  );
+  product.variants.map((variant) => ({
+    id: variant.id,
+    productId: product.id,
+    size: variant.size,
+    color: variant.color,
+    colorHex: COLOR_HEX[variant.color] || "#B48A78",
+    sku: variant.sku,
+    stock: variant.stock,
+    active: variant.isActive,
+  }));
 
 const initialVariants = adminProducts.flatMap(buildVariants);
 
@@ -105,7 +104,7 @@ const sections = [
 
 const fieldClass = "w-full rounded-xl border border-border bg-white px-3.5 py-2.5 text-sm outline-none transition focus:border-[#C05A2D] focus:ring-2 focus:ring-[#C05A2D]/10";
 
-export function AdminDashboard({ onExit, onLogout }: { onExit: () => void; onLogout: () => void }) {
+export function AdminDashboard({ adminUserId: _adminUserId, onExit, onLogout }: { adminUserId: number; onExit: () => void; onLogout: () => void }) {
   const [section, setSection] = useState<AdminSection>("overview");
   const [products, setProducts] = useState(adminProducts);
   const [variants, setVariants] = useState(initialVariants);
@@ -193,12 +192,12 @@ export function AdminDashboard({ onExit, onLogout }: { onExit: () => void; onLog
           )}
 
           {section === "attributes" && <Attributes colors={colors} newColor={newColor} setNewColor={setNewColor} onAddColor={() => { if (!newColor.trim()) return; setColors((current) => [...current, [newColor.trim(), "#B77A62"]]); setNewColor(""); }}/>} 
-          {section === "orders" && <Orders/>}
+          {section === "orders" && <Orders adminUserId={_adminUserId}/>} 
           {section === "history" && <ChangeHistory activeTab={historyTab} onTabChange={setHistoryTab}/>} 
         </main>
       </div>
 
-      {showCreate && <CreateProductModal onClose={() => setShowCreate(false)} onCreate={(name) => { const next: AdminProduct = { ...adminProducts[0], id:`p${Date.now()}`, name, sku:`DECO-${String(products.length + 1).padStart(3,"0")}`, price:0, status:"hidden", totalStock:0, variantCount:0, image:"/images/linen_shirt.png", sizes:[], colors:[] }; setProducts((current) => [next, ...current]); setShowCreate(false); }}/>} 
+      {showCreate && <CreateProductModal onClose={() => setShowCreate(false)} onCreate={(name) => { const next: AdminProduct = { ...adminProducts[0], id:`p${Date.now()}`, name, sku:`DECO-${String(products.length + 1).padStart(3,"0")}`, price:0, status:"hidden", totalStock:0, variantCount:0, image:"/images/linen_shirt.png", sizes:[], colors:[], variants:[] }; setProducts((current) => [next, ...current]); setShowCreate(false); }}/>} 
     </div>
   );
 }
@@ -238,9 +237,26 @@ function Attributes({ colors, newColor, setNewColor, onAddColor }: { colors: str
   return <section><div className="mb-6"><p className="text-sm text-muted-foreground">Danh mục dùng chung cho mọi sản phẩm</p><h2 className="mt-1 font-['Playfair_Display'] text-2xl font-semibold">Size & màu sắc</h2></div><div className="grid gap-6 xl:grid-cols-2"><div className="rounded-2xl border border-[#E8DED3] bg-white p-5"><div className="mb-5 flex items-center gap-3"><div className="rounded-xl bg-orange-50 p-2.5 text-[#C05A2D]"><Palette size={20}/></div><div><h3 className="font-semibold">Bảng Colors</h3><p className="text-xs text-muted-foreground">Màu có thể được tái sử dụng cho nhiều sản phẩm</p></div></div><div className="grid gap-2 sm:grid-cols-2">{colors.map(([name, hex]) => <div key={name} className="flex items-center gap-3 rounded-xl border border-border p-3"><span className="h-8 w-8 rounded-full border shadow-inner" style={{background:hex}}/><div className="flex-1"><p className="text-sm font-medium">{name}</p><p className="font-mono text-[11px] text-muted-foreground">{hex}</p></div><Pencil size={14} className="text-muted-foreground"/></div>)}</div><div className="mt-4 flex gap-2"><input value={newColor} onChange={(e) => setNewColor(e.target.value)} placeholder="Tên màu mới..." className={fieldClass}/><button onClick={onAddColor} className="shrink-0 rounded-xl bg-[#C05A2D] px-4 text-white"><Plus size={17}/></button></div></div><div className="rounded-2xl border border-[#E8DED3] bg-white p-5"><div className="mb-5 flex items-center gap-3"><div className="rounded-xl bg-blue-50 p-2.5 text-blue-600"><Tags size={20}/></div><div><h3 className="font-semibold">Bảng Sizes</h3><p className="text-xs text-muted-foreground">Gồm size chữ, size số và size ghép</p></div></div><div className="grid grid-cols-3 gap-2 sm:grid-cols-4">{sizes.map((size, index) => <div key={size} className="rounded-xl border border-border p-3 text-center"><p className="font-semibold">{size}</p><p className="mt-1 text-[10px] text-muted-foreground">Thứ tự {index + 1}</p></div>)}</div><button className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#C05A2D]/50 py-3 text-sm font-medium text-[#C05A2D]"><Plus size={16}/>Thêm size mới</button></div></div><div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900"><b>Lưu ý:</b> Màu hoặc size xuất hiện ở đây chưa có nghĩa mọi sản phẩm đều sử dụng chúng. Chỉ khi admin tạo một dòng trong <code className="rounded bg-white px-1.5 py-0.5">ProductVariants</code>, chúng mới thuộc về sản phẩm cụ thể.</div></section>;
 }
 
-function Orders() {
+function Orders({ adminUserId }: { adminUserId: number }) {
   const [orders, setOrders] = useState(mockOrders);
-  return <section><div className="mb-6"><p className="text-sm text-muted-foreground">Xác nhận và theo dõi quy trình xử lý đơn</p><h2 className="mt-1 font-['Playfair_Display'] text-2xl font-semibold">Quản lý đơn hàng</h2></div><div className="overflow-hidden rounded-2xl border border-[#E8DED3] bg-white"><div className="hidden grid-cols-[0.8fr_1fr_0.5fr_0.75fr_0.9fr] gap-4 border-b border-border bg-[#FBF8F4] px-5 py-3 text-xs font-semibold uppercase text-muted-foreground md:grid"><span>Mã đơn</span><span>Khách hàng</span><span>Sản phẩm</span><span>Tổng tiền</span><span>Trạng thái</span></div>{orders.map((order) => <div key={order.id} className="grid gap-3 border-b border-border px-5 py-4 last:border-0 md:grid-cols-[0.8fr_1fr_0.5fr_0.75fr_0.9fr] md:items-center"><span className="font-mono text-sm font-semibold">{order.id}</span><span className="text-sm">{order.customer}<small className="block text-muted-foreground">{order.time}</small></span><span className="text-sm">{order.items}</span><span className="text-sm font-semibold">{formatCurrency(order.total)}</span><select value={order.status} onChange={(e) => setOrders((current) => current.map((item) => item.id === order.id ? { ...item, status:e.target.value } : item))} className="rounded-xl border border-border bg-white px-3 py-2 text-sm"><option>Chờ xác nhận</option><option>Chuẩn bị hàng</option><option>Đang giao</option><option>Hoàn thành</option><option>Đã hủy</option></select></div>)}</div><p className="mt-3 text-xs text-muted-foreground">Khi trạng thái thay đổi, Trigger sẽ ghi trạng thái cũ và mới vào OrderStatusHistory.</p></section>;
+  useEffect(() => {
+    if (!databaseApiEnabled) return;
+    getAdminOrders(adminUserId).then(({ data }) => setOrders(data.map((row) => ({
+      id:String(row.OrderID), customer:String(row.RecipientName), items:Number(row.ItemCount), total:Number(row.TotalAmount),
+      status:({PENDING:"Chờ xác nhận",PREPARING:"Chuẩn bị hàng",SHIPPING:"Đang giao",COMPLETED:"Hoàn thành",CANCELLED:"Đã hủy"} as Record<string,string>)[String(row.Status)],
+      tone:"", time:new Date(String(row.CreatedAt)).toLocaleString("vi-VN"),
+    })))).catch(console.warn);
+  }, [adminUserId]);
+  const changeStatus = async (order: typeof mockOrders[number], label: string) => {
+    try {
+      if (databaseApiEnabled) {
+        if (label === "Hoàn thành") await completeOrder(Number(order.id), adminUserId, true);
+        else if (label === "Chuẩn bị hàng" || label === "Đang giao") await updateOrderStatus(Number(order.id), adminUserId, label === "Chuẩn bị hàng" ? "PREPARING" : "SHIPPING");
+      }
+      setOrders((current) => current.map((item) => item.id === order.id ? { ...item, status:label } : item));
+    } catch (error) { window.alert(error instanceof Error ? error.message : "Không thể cập nhật đơn."); }
+  };
+  return <section><div className="mb-6"><p className="text-sm text-muted-foreground">Xác nhận và theo dõi quy trình xử lý đơn</p><h2 className="mt-1 font-['Playfair_Display'] text-2xl font-semibold">Quản lý đơn hàng</h2></div><div className="overflow-hidden rounded-2xl border border-[#E8DED3] bg-white"><div className="hidden grid-cols-[0.8fr_1fr_0.5fr_0.75fr_0.9fr] gap-4 border-b border-border bg-[#FBF8F4] px-5 py-3 text-xs font-semibold uppercase text-muted-foreground md:grid"><span>Mã đơn</span><span>Khách hàng</span><span>Sản phẩm</span><span>Tổng tiền</span><span>Trạng thái</span></div>{orders.map((order) => <div key={order.id} className="grid gap-3 border-b border-border px-5 py-4 last:border-0 md:grid-cols-[0.8fr_1fr_0.5fr_0.75fr_0.9fr] md:items-center"><span className="font-mono text-sm font-semibold">{order.id}</span><span className="text-sm">{order.customer}<small className="block text-muted-foreground">{order.time}</small></span><span className="text-sm">{order.items}</span><span className="text-sm font-semibold">{formatCurrency(order.total)}</span><select value={order.status} onChange={(e) => void changeStatus(order,e.target.value)} className="rounded-xl border border-border bg-white px-3 py-2 text-sm"><option>Chờ xác nhận</option><option>Chuẩn bị hàng</option><option>Đang giao</option><option>Hoàn thành</option><option disabled>Đã hủy</option></select></div>)}</div><p className="mt-3 text-xs text-muted-foreground">Khi trạng thái thay đổi, Trigger sẽ ghi trạng thái cũ và mới vào OrderStatusHistory.</p></section>;
 }
 
 function ChangeHistory({ activeTab, onTabChange }: { activeTab: "price" | "order"; onTabChange: (tab: "price" | "order") => void }) {

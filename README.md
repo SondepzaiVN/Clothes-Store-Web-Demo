@@ -30,6 +30,8 @@ Seller-facing functions are intentionally excluded because Seller is not an acto
 | Area | Technology |
 |---|---|
 | User interface | React 18, TypeScript |
+| Backend API | Node.js, Express |
+| Database | Microsoft SQL Server, stored procedures and transactions |
 | Development and build | Vite |
 | Styling | Tailwind CSS |
 | Icons | Lucide React |
@@ -42,9 +44,10 @@ Seller-facing functions are intentionally excluded because Seller is not an acto
 
 ## Installation
 
-Clone or extract the project, open a terminal in this directory, and run:
+Clone or extract the project, then start the frontend:
 
 ```bash
+cd frontend
 npm install
 npm run dev
 ```
@@ -67,7 +70,29 @@ The prototype uses simulated authentication so that the complete interface flow 
 123456
 ```
 
+For an account preloaded with orders, payment states, a saved address, and a support conversation, use:
+
+```text
+Email: demo@deco.vn
+Password: Demo@123
+OTP: 123456
+```
+
+Admin đăng nhập bằng cùng giao diện với khách hàng. Sau khi xác nhận OTP, tài
+khoản có vai trò `ADMIN` được chuyển tới `/admin`:
+
+```text
+Email: admin@deco.vn
+Password: Admin@123
+OTP: 123456
+```
+
 Registration data, cart contents, conversations, and orders are stored only in the application's in-memory state and are reset when the browser page is reloaded.
+
+The repository contains a SQL Server backend in `backend/`. Set the values from
+`backend/.env.example`, start the backend, and set
+`VITE_USE_DATABASE_API=true` in the frontend environment to run the catalog,
+order, payment and administration flows against the local `DECO` database.
 
 ## Available Commands
 
@@ -78,29 +103,34 @@ Registration data, cart contents, conversations, and orders are stored only in t
 | `npm run preview` | Preview the generated production build. |
 | `npm run lint` | Check the source code with ESLint. |
 
+Backend commands:
+
+```bash
+cd backend
+npm install
+npm test
+npm start
+```
+
+Database scripts and their required execution order are documented in
+[`database/README.md`](database/README.md).
+
 ## Project Structure
 
 ```text
-web-ban-quan-ao/
-├── public/
-│   ├── images/                 # Local product images
-│   └── favicon.svg             # DECO browser icon
-├── src/
-│   ├── components/
-│   │   ├── auth/               # Login, registration, and OTP modal
-│   │   ├── layout/             # Header and mobile navigation
-│   │   └── products/           # Product card, rating, and category UI
-│   ├── data/
-│   │   └── mockData.ts         # Products, vouchers, and initial demo data
-│   ├── styles/                 # Tailwind and theme styles
-│   ├── types/
-│   │   └── index.ts            # Shared TypeScript models
-│   ├── utils/
-│   │   └── format.ts           # Currency and search-text helpers
-│   ├── App.tsx                 # Application state and main feature flows
-│   └── main.tsx                # React entry point
-├── package.json
-└── vite.config.ts
+Clothes-Store-Web-Demo/
+├── frontend/                   # React + Vite customer/admin interface
+│   ├── public/
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.ts
+├── backend/                    # Node.js + Express API
+│   ├── src/
+│   ├── test/
+│   └── package.json
+├── database/                   # deploy, seeds, tests và schema.dbml
+├── README.md
+└── vercel.json
 ```
 
 ## Verification
@@ -108,6 +138,7 @@ web-ban-quan-ao/
 Before submitting or deploying the project, run:
 
 ```bash
+cd frontend
 npm run lint
 npm run build
 ```
@@ -116,7 +147,8 @@ Both commands should finish without errors.
 
 ## Prototype Limitations
 
-- No backend server or persistent database is connected.
+- Authentication is simulated in the frontend; there is no production JWT/session validation.
+- The SQL Server backend is intended to run locally for the course demonstration.
 - OTP delivery is simulated; no real email is sent.
 - Bank and e-wallet payments do not contact a real payment gateway.
 - Delivery updates and customer-support replies are simulated.

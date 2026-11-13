@@ -1,0 +1,12 @@
+const router=require("express").Router();
+const admin=require("../controllers/admin.controller");
+const orders=require("../controllers/order.controller");
+router.get("/orders",admin.orders);
+router.patch("/orders/:orderId/status",orders.updateStatus);
+router.post("/orders/:orderId/complete",orders.complete);
+router.post("/products",admin.createProduct);
+router.patch("/products/:productId",admin.updateProduct);
+router.patch("/products/:productId/active",admin.setActive);
+router.post("/variants",admin.upsertVariant);
+router.patch("/variants/:variantId/stock",admin.adjustStock);
+module.exports=router;

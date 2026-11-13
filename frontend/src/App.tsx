@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Check,
@@ -30,10 +31,14 @@ import {
   BASE_PRODUCTS,
   CATEGORIES,
   createSupportConversation,
+  DEMO_BUYER_CONVERSATIONS,
+  DEMO_BUYER_ORDERS,
+  DEMO_CUSTOMER,
   DECO_SUPPORT_ID,
   INITIAL_BUYER_CONVERSATIONS,
   INITIAL_BUYER_ORDERS,
   ORDER_STATUS,
+  PAYMENT_STATUS,
   VOUCHERS,
 } from "./data/mockData";
 import type {
@@ -55,12 +60,20 @@ import {
   formatCurrency as fmt,
   normalizeText,
 } from "./utils/format";
+import { cancelOrder as cancelDatabaseOrder, createOrder as createDatabaseOrder, databaseApiEnabled, getOrderDetail, getUserOrders, loadProductsFromDatabase, simulatePaymentWebhook } from "./services/decoApi";
+import { clearSession, readSession, writeSession } from "./services/session";
+
+const cloneProducts = () => BASE_PRODUCTS.map((product) => ({
+  ...product,
+  variants: product.variants.map((variant) => ({ ...variant })),
+}));
 
 export default function App() {
+  const navigate = useNavigate();
   const [view, setView]           = useState<View>("home");
   const [selProd, setSelProd]     = useState<Product | null>(null);
   const [cart, setCart]           = useState<CartItem[]>([]);
-  const [user, setUser]           = useState<AppUser | null>(null);
+  const [user, setUser]           = useState<AppUser | null>(readSession);
   const [showAuth, setShowAuth]   = useState(false);
   const [authMode, setAuthMode]   = useState<AuthMode>("login");
   const [authStep, setAuthStep]   = useState<AuthStep>("credentials");
@@ -86,23 +99,58 @@ export default function App() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [orderNotice, setOrderNotice] = useState("");
   const [lastOrder, setLastOrder] = useState<Order | null>(null);
+  const [products, setProducts] = useState<Product[]>(cloneProducts);
 
   const msgEnd = useRef<HTMLDivElement>(null);
   useEffect(() => { msgEnd.current?.scrollIntoView({ behavior:"smooth" }); }, [activeBC, buyConvos]);
   useEffect(() => { window.scrollTo({ top:0, behavior:"auto" }); }, [view]);
+  useEffect(() => { if (user?.role === "ADMIN") navigate("/admin", { replace:true }); }, [navigate, user]);
+  useEffect(() => {
+    if (!databaseApiEnabled) return;
+    let active = true;
+    loadProductsFromDatabase()
+      .then((databaseProducts) => {
+        if (active && databaseProducts.length > 0) setProducts(databaseProducts);
+      })
+      .catch((error) => console.warn("Không thể tải catalog từ DECO API; tiếp tục dùng mock data.", error));
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (!databaseApiEnabled || user?.role !== "CUSTOMER") return;
+    getUserOrders(user.databaseUserId).then(async ({ data }) => {
+      const details = await Promise.all(data.map((row) => getOrderDetail(Number(row.OrderID), user.databaseUserId)));
+      const mapped: Order[] = details.map(({ order, items, payments }) => ({
+        id:String(order.OrderID), customer:String(order.RecipientName), phone:String(order.RecipientPhone), address:String(order.ShippingAddress),
+        items:items.map((item) => { const variantId=String(item.ProductVariantID); const product=products.find((candidate)=>candidate.variants.some((variant)=>variant.id===variantId)); return { productId:product?.id||"", variantId, name:String(item.ProductNameSnapshot), size:String(item.SizeNameSnapshot), color:String(item.ColorNameSnapshot), qty:Number(item.Quantity), price:Number(item.UnitPrice) }; }),
+        subtotal:Number(order.Subtotal), shippingFee:Number(order.ShippingFee), discount:Number(order.DiscountAmount), voucherCode:order.VoucherCode ? String(order.VoucherCode) : undefined,
+        total:Number(order.TotalAmount), date:new Date(String(order.CreatedAt)).toLocaleDateString("vi-VN"), status:String(order.Status).toLowerCase() as OrderStatus,
+        paymentMethod:String(payments[0]?.PaymentMethod||"COD").toLowerCase() as Order["paymentMethod"], paymentStatus:String(payments[0]?.PaymentStatus||"PENDING").toLowerCase() as Order["paymentStatus"],
+        transactionRef:payments[0]?.TransactionRef ? String(payments[0].TransactionRef) : undefined, note:order.Note ? String(order.Note) : undefined,
+      }));
+      setBuyerOrders(mapped);
+    }).catch((error)=>console.warn("Không thể tải đơn hàng từ DECO API.",error));
+  }, [user, products]);
 
-  const allProducts = BASE_PRODUCTS;
+  const allProducts = products.filter((product) => product.isActive);
   const cartCount    = cart.reduce((a, c) => a + c.quantity, 0);
   const selectedCart = cart.filter((item) => item.selected);
   const selectedCount = selectedCart.reduce((a, c) => a + c.quantity, 0);
   const cartTotal    = selectedCart.reduce((a, c) => a + c.product.price * c.quantity, 0);
-  const selectedVoucher = VOUCHERS.find((voucher) => voucher.code === payForm.voucher) || VOUCHERS[2];
+  const selectedVoucher = VOUCHERS.find((voucher) => voucher.code === payForm.voucher) || VOUCHERS.find((voucher) => voucher.code === "NONE")!;
   const voucherDiscount = selectedVoucher.discount(cartTotal);
   const shippingFee = cartTotal > 0 ? 30000 : 0;
   const checkoutTotal = Math.max(0, cartTotal + shippingFee - voucherDiscount);
   const totalUnread  = user ? buyConvos.reduce((a, c) => a + c.unread, 0) : 0;
   const filtered     = allProducts.filter((p) => category === "Tất cả" || p.category === category);
   const recommended  = allProducts.filter((p) => liked.some((id) => { const lp = allProducts.find((x) => x.id === id); return lp && (lp.category === p.category || lp.shopId === p.shopId) && p.id !== id; })).slice(0, 4);
+  const getVariantStock = (product: Product, size: string, color: string) => {
+    const currentProduct = products.find((item) => item.id === product.id) ?? product;
+    return currentProduct.variants.find((variant) => variant.size === size && variant.color === color && variant.isActive)?.stock ?? 0;
+  };
+  const isVoucherAvailable = (voucherCode: string) => {
+    const voucher = VOUCHERS.find((item) => item.code === voucherCode);
+    return Boolean(voucher?.isActive && cartTotal >= voucher.minimumOrder);
+  };
 
   const toggleLike   = (id: string) => setLiked((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const openProduct  = (p: Product) => { setSelProd(p); setSelSize(""); setSelColor(""); setView("product"); };
@@ -116,10 +164,12 @@ export default function App() {
   const openMessages = () => { if (!user) { setPendingAction("messages"); setShowAuth(true); return; } ensureSupportConversation(); setActiveBC(DECO_SUPPORT_ID); setView("messages"); };
   const addToCart    = () => {
     if (!selProd || !selSize || !selColor) return;
-    setCart((prev) => { const ex = prev.find((i) => i.product.id === selProd.id && i.size === selSize && i.color === selColor); return ex ? prev.map((i) => i === ex ? { ...i, quantity: i.quantity + 1, selected:true } : i) : [...prev, { product: selProd, quantity:1, size: selSize, color: selColor, selected:true }]; });
+    const stock = getVariantStock(selProd, selSize, selColor);
+    if (stock <= 0) return;
+    setCart((prev) => { const ex = prev.find((i) => i.product.id === selProd.id && i.size === selSize && i.color === selColor); return ex ? prev.map((i) => i === ex ? { ...i, quantity: Math.min(stock, i.quantity + 1), selected:true } : i) : [...prev, { product: selProd, quantity:1, size: selSize, color:selColor, selected:true }]; });
     setView("cart"); setCheckout("bag");
   };
-  const updateQty    = (idx: number, d: number) => setCart((prev) => prev.map((item, i) => i === idx ? { ...item, quantity: Math.max(1, item.quantity + d) } : item));
+  const updateQty    = (idx: number, d: number) => setCart((prev) => prev.map((item, i) => i === idx ? { ...item, quantity: Math.min(getVariantStock(item.product, item.size, item.color), Math.max(1, item.quantity + d)) } : item));
   const removeItem   = (idx: number) => setCart((prev) => prev.filter((_, i) => i !== idx));
   const toggleCartSelection = (idx: number) => setCart((prev) => prev.map((item, i) => i === idx ? { ...item, selected:!item.selected } : item));
   const sendMsg      = () => {
@@ -130,7 +180,8 @@ export default function App() {
     setTimeout(() => { const r: BuyerMsg = { id:(Date.now()+1).toString(), from:"admin", text:"Cảm ơn bạn! Bộ phận hỗ trợ DECO sẽ phản hồi sớm nhất.", time: new Date().toLocaleTimeString("vi-VN",{hour:"2-digit",minute:"2-digit"}) }; setBuyConvos((prev) => prev.map((c) => c.shopId === activeBC ? { ...c, messages:[...c.messages, r] } : c)); }, 1000);
   };
   const prepareCheckout = () => {
-    const bestVoucher = VOUCHERS.slice(0, 2).reduce((best, current) => current.discount(cartTotal) > best.discount(cartTotal) ? current : best, VOUCHERS[0]);
+    const availableVouchers = VOUCHERS.filter((voucher) => voucher.isActive && cartTotal >= voucher.minimumOrder);
+    const bestVoucher = availableVouchers.reduce((best, current) => current.discount(cartTotal) > best.discount(cartTotal) ? current : best, VOUCHERS.find((voucher) => voucher.code === "NONE")!);
     setPayForm((prev) => ({ ...prev, name:prev.name || savedAddress.name, phone:prev.phone || savedAddress.phone, address:prev.address || savedAddress.address, voucher:bestVoucher.code }));
     setPayError(""); setCheckout("payment"); setView("cart");
   };
@@ -148,6 +199,7 @@ export default function App() {
     if (!emailValid) return setAuthError("Email không đúng định dạng.");
     if (authMode === "register" && !/^0\d{9}$/.test(authForm.phone)) return setAuthError("Số điện thoại phải gồm 10 chữ số và bắt đầu bằng 0.");
     if (authForm.password.length < 6) return setAuthError("Mật khẩu phải có ít nhất 6 ký tự.");
+    if (authMode === "login" && authForm.email.trim().toLowerCase() === "admin@deco.vn" && authForm.password !== "Admin@123") return setAuthError("Email hoặc mật khẩu không chính xác.");
     if (authMode === "register" && authForm.password !== authForm.confirmPassword) return setAuthError("Hai mật khẩu không trùng nhau.");
     setAuthStep("otp"); setAuthNotice("Mã OTP đã được gửi đến email của bạn.");
   };
@@ -163,10 +215,26 @@ export default function App() {
       setAuthForm((prev) => ({ ...prev, name:"", phone:"", password:"", confirmPassword:"", otp:"" })); return;
     }
     const loginEmail = authForm.email.trim();
-    const displayName = registeredAccount?.email.toLowerCase() === loginEmail.toLowerCase()
+    const isAdmin = loginEmail.toLowerCase() === "admin@deco.vn";
+    const isDemoCustomer = loginEmail.toLowerCase() === DEMO_CUSTOMER.email;
+    const displayName = isDemoCustomer
+      ? DEMO_CUSTOMER.name
+      : registeredAccount?.email.toLowerCase() === loginEmail.toLowerCase()
       ? registeredAccount.name
       : loginEmail.split("@")[0] || "Người dùng";
-    setUser({ id:"u1", name:displayName, email:loginEmail });
+    const sessionUser: AppUser = {
+      id:isAdmin ? "admin-1" : isDemoCustomer ? DEMO_CUSTOMER.id : "u1",
+      databaseUserId:isAdmin ? 1 : 2,
+      name:isAdmin ? "Admin DECO" : displayName,
+      email:loginEmail,
+      role:isAdmin ? "ADMIN" : "CUSTOMER",
+    };
+    setUser(sessionUser);
+    writeSession(sessionUser);
+    setProducts(cloneProducts());
+    setBuyerOrders(isDemoCustomer ? DEMO_BUYER_ORDERS.map((order) => ({ ...order, items:order.items.map((item) => ({ ...item })) })) : []);
+    setBuyConvos(isDemoCustomer ? DEMO_BUYER_CONVERSATIONS.map((conversation) => ({ ...conversation, messages:conversation.messages.map((message) => ({ ...message })) })) : []);
+    setSavedAddress(isDemoCustomer ? { name:DEMO_CUSTOMER.name, phone:DEMO_CUSTOMER.phone, address:DEMO_CUSTOMER.address } : { name:"", phone:"", address:"" });
     setShowAuth(false); setAuthStep("credentials"); setAuthError(""); setAuthNotice("");
     setAuthForm({ name:"", email:"", phone:"", password:"", confirmPassword:"", otp:"" });
     if (pendingAction === "checkout") prepareCheckout();
@@ -174,23 +242,78 @@ export default function App() {
       ensureSupportConversation(); setActiveBC(DECO_SUPPORT_ID); setView("messages");
     }
     setPendingAction(null);
+    if (isAdmin) navigate("/admin", { replace:true });
   };
 
-  const placeOrder = () => {
+  const placeOrder = async () => {
     setPayError("");
     const normalizedPhone = payForm.phone.replace(/\D/g, "");
     if (!payForm.name.trim() || !/^0\d{9}$/.test(normalizedPhone) || !payForm.address.trim()) {
       setPayError("Vui lòng nhập đầy đủ họ tên, số điện thoại hợp lệ và địa chỉ giao hàng."); return;
     }
+    const unavailableItem = selectedCart.find((item) => item.quantity > getVariantStock(item.product, item.size, item.color));
+    if (unavailableItem) {
+      setPayError(`${unavailableItem.product.name} (${unavailableItem.size}, ${unavailableItem.color}) không còn đủ số lượng trong kho.`); return;
+    }
+    if (!isVoucherAvailable(payForm.voucher)) {
+      setPayError("Voucher không còn hiệu lực hoặc đơn hàng chưa đạt giá trị tối thiểu."); return;
+    }
     const paymentMethod = payForm.method === "transfer" ? "bank" : payForm.method === "momo" ? "wallet" : "cod";
+    let databaseOrder: { OrderID: number; OrderCode: string } | null = null;
+    if (databaseApiEnabled && user) {
+      try {
+        const created = await createDatabaseOrder({ userId:user.databaseUserId, recipientName:payForm.name.trim(), recipientPhone:normalizedPhone, shippingAddress:payForm.address.trim(), voucherCode:selectedVoucher.code === "NONE" ? undefined : selectedVoucher.code, paymentMethod:paymentMethod.toUpperCase() as "COD"|"BANK"|"WALLET", note:payForm.note, items:selectedCart.map((item)=>({ productVariantId:Number((products.find((p)=>p.id===item.product.id)||item.product).variants.find((v)=>v.size===item.size&&v.color===item.color)!.id), quantity:item.quantity })) });
+        databaseOrder = created.output;
+        const detail = await getOrderDetail(created.output.OrderID, user.databaseUserId);
+        const paymentId = Number(detail.payments[0]?.PaymentID || 0);
+        if (paymentMethod !== "cod" && paymentId) await simulatePaymentWebhook(paymentId, "PAID");
+      } catch (error) { setPayError(error instanceof Error ? error.message : "Không thể tạo đơn hàng."); return; }
+    }
+    const nextOrderNumber = Math.max(0, ...buyerOrders.map((item) => Number(item.id.match(/\d+$/)?.[0] ?? 0))) + 1;
     const order: Order = {
-      id:`DECO-${String(buyerOrders.length + 1).padStart(6, "0")}`, customer:payForm.name, phone:normalizedPhone, address:payForm.address,
-      items:selectedCart.map((item) => ({ name:item.product.name, size:item.size, color:item.color, qty:item.quantity, price:item.product.price })),
+      id:databaseOrder ? String(databaseOrder.OrderID) : `DECO-${String(nextOrderNumber).padStart(6, "0")}`, customer:payForm.name, phone:normalizedPhone, address:payForm.address,
+      items:selectedCart.map((item) => {
+        const currentProduct = products.find((product) => product.id === item.product.id) ?? item.product;
+        const variant = currentProduct.variants.find((candidate) => candidate.size === item.size && candidate.color === item.color)!;
+        return { productId:currentProduct.id, variantId:variant.id, name:currentProduct.name, size:item.size, color:item.color, qty:item.quantity, price:currentProduct.price };
+      }),
+      subtotal:cartTotal, shippingFee, discount:voucherDiscount, voucherCode:selectedVoucher.code === "NONE" ? undefined : selectedVoucher.code,
       total:checkoutTotal, date:new Date().toLocaleDateString("vi-VN"), status:"pending", paymentMethod,
       paymentStatus:paymentMethod === "cod" ? "pending" : "paid", note:payForm.note, trackingUpdated:"Vừa xong",
+      transactionRef:paymentMethod === "cod" ? undefined : `DEMO-${paymentMethod.toUpperCase()}-${String(nextOrderNumber).padStart(6, "0")}`,
     };
+    setProducts((current) => current.map((product) => {
+      const orderedItems = selectedCart.filter((item) => item.product.id === product.id);
+      if (orderedItems.length === 0) return product;
+      return {
+        ...product,
+        variants:product.variants.map((variant) => {
+          const orderedItem = orderedItems.find((item) => item.size === variant.size && item.color === variant.color);
+          return orderedItem ? { ...variant, stock:variant.stock - orderedItem.quantity } : variant;
+        }),
+      };
+    }));
     setBuyerOrders((prev) => [order, ...prev]); setLastOrder(order); setSavedAddress({ name:payForm.name, phone:payForm.phone, address:payForm.address });
     setCart((prev) => prev.filter((item) => !item.selected)); setCheckout("success");
+  };
+
+  const cancelOrder = async (order: Order) => {
+    if (order.status !== "pending" || order.paymentStatus === "paid") return;
+    if (databaseApiEnabled && user) {
+      try { await cancelDatabaseOrder(Number(order.id), user.databaseUserId, "Khách hàng hủy đơn"); }
+      catch (error) { setOrderNotice(error instanceof Error ? error.message : "Không thể hủy đơn."); return; }
+    }
+    setProducts((current) => current.map((product) => ({
+      ...product,
+      variants:product.variants.map((variant) => {
+        const returnedItem = order.items.find((item) => item.productId === product.id && item.variantId === variant.id);
+        return returnedItem ? { ...variant, stock:variant.stock + returnedItem.qty } : variant;
+      }),
+    })));
+    setBuyerOrders((current) => current.map((item) => item.id === order.id
+      ? { ...item, status:"cancelled", paymentStatus:item.paymentStatus === "pending" ? "cancelled" : item.paymentStatus, trackingUpdated:"Vừa xong" }
+      : item));
+    setOrderNotice("Đã hủy đơn, hoàn lại tồn kho và hủy Payment đang chờ.");
   };
 
   const curBC = buyConvos.find((c) => c.shopId === activeBC);
@@ -249,7 +372,7 @@ export default function App() {
           setView("orders");
         }}
         onLogin={() => setShowAuth(true)}
-        onLogout={() => setUser(null)}
+        onLogout={() => { clearSession(); setUser(null); }}
       />
 
       <main className="pb-16">
@@ -304,7 +427,9 @@ export default function App() {
 
         {/* ── Product Detail ── */}
         {view === "product" && selProd && (() => {
-          const p = selProd; const canAdd = selSize && selColor;
+          const p = selProd;
+          const selectedVariant = p.variants.find((variant) => variant.size === selSize && variant.color === selColor && variant.isActive);
+          const canAdd = Boolean(selectedVariant && selectedVariant.stock > 0);
           return (
             <div className="max-w-5xl mx-auto px-4 py-6">
               <button onClick={() => setView("home")} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-5 transition-colors"><ArrowLeft size={15} /> Tiếp tục mua sắm</button>
@@ -328,15 +453,16 @@ export default function App() {
                   </div>
                   <div className="mb-4">
                     <p className="text-sm font-medium mb-2">Kích thước {selSize && <span className="text-[#C05A2D]">— {selSize}</span>}</p>
-                    <div className="flex flex-wrap gap-2">{p.sizes.map((s) => <button key={s} onClick={() => setSelSize(s)} className={`px-3.5 py-1.5 rounded-lg text-sm border transition-all ${selSize === s ? "border-[#C05A2D] bg-[#C05A2D]/10 text-[#C05A2D] font-medium" : "border-border hover:border-foreground/40"}`}>{s}</button>)}</div>
+                    <div className="flex flex-wrap gap-2">{p.sizes.map((s) => { const unavailable = selColor ? getVariantStock(p, s, selColor) === 0 : !p.variants.some((variant) => variant.size === s && variant.stock > 0 && variant.isActive); return <button key={s} disabled={unavailable} onClick={() => setSelSize(s)} className={`px-3.5 py-1.5 rounded-lg text-sm border transition-all ${unavailable ? "cursor-not-allowed border-border bg-muted text-muted-foreground line-through opacity-60" : selSize === s ? "border-[#C05A2D] bg-[#C05A2D]/10 text-[#C05A2D] font-medium" : "border-border hover:border-foreground/40"}`}>{s}</button>; })}</div>
                   </div>
                   <div className="mb-5">
                     <p className="text-sm font-medium mb-2">Màu sắc {selColor && <span className="text-[#C05A2D]">— {selColor}</span>}</p>
-                    <div className="flex flex-wrap gap-2">{p.colors.map((c) => <button key={c} onClick={() => setSelColor(c)} className={`px-3.5 py-1.5 rounded-lg text-sm border transition-all ${selColor === c ? "border-[#C05A2D] bg-[#C05A2D]/10 text-[#C05A2D] font-medium" : "border-border hover:border-foreground/40"}`}>{c}</button>)}</div>
+                    <div className="flex flex-wrap gap-2">{p.colors.map((c) => { const unavailable = selSize ? getVariantStock(p, selSize, c) === 0 : !p.variants.some((variant) => variant.color === c && variant.stock > 0 && variant.isActive); return <button key={c} disabled={unavailable} onClick={() => setSelColor(c)} className={`px-3.5 py-1.5 rounded-lg text-sm border transition-all ${unavailable ? "cursor-not-allowed border-border bg-muted text-muted-foreground line-through opacity-60" : selColor === c ? "border-[#C05A2D] bg-[#C05A2D]/10 text-[#C05A2D] font-medium" : "border-border hover:border-foreground/40"}`}>{c}</button>; })}</div>
                   </div>
+                  {selSize && selColor && <p className={`mb-4 rounded-lg px-3 py-2 text-xs ${selectedVariant && selectedVariant.stock > 0 ? selectedVariant.stock <= 3 ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>{selectedVariant && selectedVariant.stock > 0 ? `Còn ${selectedVariant.stock} sản phẩm · SKU ${selectedVariant.sku}` : "Tổ hợp size và màu này đã hết hàng."}</p>}
                   <p className="text-sm text-muted-foreground leading-relaxed mb-6">{p.description}</p>
                   <div className="flex gap-3">
-                    <button onClick={addToCart} disabled={!canAdd} className={`flex-1 py-3 rounded-xl text-sm font-medium transition-all ${canAdd ? "bg-[#C05A2D] text-white hover:bg-[#A84D25] shadow-sm" : "bg-muted text-muted-foreground cursor-not-allowed"}`}>{canAdd ? "Thêm vào giỏ hàng" : "Chọn size và màu"}</button>
+                    <button onClick={addToCart} disabled={!canAdd} className={`flex-1 py-3 rounded-xl text-sm font-medium transition-all ${canAdd ? "bg-[#C05A2D] text-white hover:bg-[#A84D25] shadow-sm" : "bg-muted text-muted-foreground cursor-not-allowed"}`}>{canAdd ? "Thêm vào giỏ hàng" : selSize && selColor ? "Biến thể đã hết hàng" : "Chọn size và màu"}</button>
                     <button onClick={() => openConvo()} className="px-4 py-3 rounded-xl border border-border text-sm font-medium hover:bg-secondary transition-colors flex items-center gap-2"><MessageCircle size={15} /> Chat</button>
                   </div>
                   <div className="flex flex-wrap gap-2 mt-4">{p.tags.map((t) => <span key={t} className="flex items-center gap-1 px-2.5 py-1 bg-secondary rounded-full text-xs text-muted-foreground"><Tag size={10} />{t}</span>)}</div>
@@ -372,7 +498,7 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-6">
                 <div className="space-y-5">
                   <section className="bg-card border border-border rounded-2xl p-5"><div className="flex items-center justify-between mb-4"><h2 className="font-['Playfair_Display'] text-lg font-semibold">Địa chỉ giao hàng</h2><button onClick={() => setPayForm({ ...payForm, ...savedAddress })} className="text-xs text-[#C05A2D] font-medium">Dùng địa chỉ đã lưu</button></div><div className="space-y-3"><input placeholder="Họ và tên" value={payForm.name} onChange={(e) => setPayForm({ ...payForm, name:e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30"/><input inputMode="tel" placeholder="Số điện thoại" value={payForm.phone} onChange={(e) => setPayForm({ ...payForm, phone:e.target.value })} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30"/><textarea placeholder="Địa chỉ giao hàng" value={payForm.address} onChange={(e) => setPayForm({ ...payForm, address:e.target.value })} rows={3} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 resize-none"/></div></section>
-                  <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3 flex items-center gap-2"><TicketPercent size={17} className="text-[#C05A2D]"/>Voucher</h3><div className="space-y-2">{VOUCHERS.map((voucher) => <button key={voucher.code} onClick={() => setPayForm({ ...payForm, voucher:voucher.code })} className={`w-full flex items-center justify-between rounded-xl border px-4 py-3 text-left ${payForm.voucher === voucher.code ? "border-[#C05A2D] bg-[#C05A2D]/5" : "border-border"}`}><span><span className="block text-sm font-medium">{voucher.code === "BEST10" ? "Voucher tốt nhất" : voucher.code}</span><span className="text-xs text-muted-foreground">{voucher.label}</span></span>{payForm.voucher === voucher.code && <Check size={16} className="text-[#C05A2D]"/>}</button>)}</div></section>
+                  <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3 flex items-center gap-2"><TicketPercent size={17} className="text-[#C05A2D]"/>Voucher</h3><div className="space-y-2">{VOUCHERS.map((voucher) => { const available = voucher.isActive && cartTotal >= voucher.minimumOrder; return <button key={voucher.code} disabled={!available} onClick={() => setPayForm({ ...payForm, voucher:voucher.code })} className={`w-full flex items-center justify-between rounded-xl border px-4 py-3 text-left ${!available ? "cursor-not-allowed border-border bg-muted/50 opacity-60" : payForm.voucher === voucher.code ? "border-[#C05A2D] bg-[#C05A2D]/5" : "border-border"}`}><span><span className="block text-sm font-medium">{voucher.code === "BEST10" ? "Voucher tốt nhất" : voucher.code}</span><span className="text-xs text-muted-foreground">{voucher.label}{voucher.isActive && cartTotal < voucher.minimumOrder ? ` · Cần đơn từ ${fmt(voucher.minimumOrder)}` : ""}</span></span>{payForm.voucher === voucher.code && available && <Check size={16} className="text-[#C05A2D]"/>}</button>; })}</div></section>
                   <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Ghi chú với shop</h3><textarea placeholder="Ví dụ: giao giờ hành chính, kiểm tra kỹ sản phẩm..." value={payForm.note} onChange={(e) => setPayForm({ ...payForm, note:e.target.value })} rows={3} className="w-full px-4 py-2.5 bg-muted rounded-xl text-sm outline-none focus:ring-2 ring-[#C05A2D]/30 resize-none"/></section>
                   <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3 flex items-center gap-2"><CreditCard size={17}/>Phương thức thanh toán</h3><div className="space-y-2">{[["cod","Thanh toán khi nhận hàng (COD)","Thanh toán cho đơn vị vận chuyển"],["transfer","Ngân hàng","Thanh toán trực tuyến qua ngân hàng"],["momo","Ví điện tử","Thanh toán bằng ví điện tử"]].map(([val,label,desc]) => <button key={val} onClick={() => setPayForm({ ...payForm, method:val })} className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl border text-left transition-all ${payForm.method === val ? "border-[#C05A2D] bg-[#C05A2D]/5" : "border-border hover:border-foreground/30"}`}><div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${payForm.method === val ? "border-[#C05A2D]" : "border-muted-foreground"}`}>{payForm.method === val && <div className="w-2 h-2 rounded-full bg-[#C05A2D]"/>}</div><span><span className="block text-sm font-medium">{label}</span><span className="text-xs text-muted-foreground">{desc}</span></span></button>)}</div></section>
                 </div>
@@ -432,10 +558,46 @@ export default function App() {
         {/* ── Buyer Order Tracking ── */}
         {view === "orders" && (() => {
           const order = buyerOrders.find((item) => item.id === selectedOrderId);
-           if (!order) return <div className="max-w-5xl mx-auto px-4 py-6"><div className="flex items-center justify-between mb-6"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn mua của tôi</h2><p className="text-sm text-muted-foreground">Theo dõi tình trạng xử lý và giao hàng</p></div><button onClick={() => setView("home")} className="text-sm text-muted-foreground">Tiếp tục mua sắm</button></div>{buyerOrders.length === 0 ? <div className="bg-card border border-dashed border-border rounded-2xl py-16 px-6 text-center"><div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-[#C05A2D]/10 flex items-center justify-center"><Package size={25} className="text-[#C05A2D]"/></div><h3 className="font-semibold">Bạn chưa có đơn hàng nào</h3><p className="text-sm text-muted-foreground mt-1 mb-5">Các đơn được đặt thành công sẽ xuất hiện tại đây.</p><button onClick={() => setView("home")} className="px-5 py-2.5 bg-[#C05A2D] text-white rounded-full text-sm font-medium">Bắt đầu mua sắm</button></div> : <div className="space-y-3">{buyerOrders.map((item) => <button key={item.id} onClick={() => { setSelectedOrderId(item.id); setOrderNotice(""); }} className="w-full bg-card border border-border rounded-2xl p-4 text-left hover:shadow-sm transition-shadow"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><div><span className="font-mono text-sm font-semibold">{item.id}</span><span className="text-xs text-muted-foreground ml-2">{item.date}</span></div><span className={`px-2.5 py-1 rounded-full text-xs font-medium ${ORDER_STATUS[item.status].cls}`}>{ORDER_STATUS[item.status].label}</span></div><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center"><Package size={20} className="text-[#C05A2D]"/></div><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{item.items.map((product) => product.name).join(", ")}</p><p className="text-xs text-muted-foreground">{item.items.reduce((sum, product) => sum + product.qty, 0)} sản phẩm · {item.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</p></div><span className="font-semibold text-[#C05A2D]">{fmt(item.total)}</span><ChevronRight size={16} className="text-muted-foreground"/></div></button>)}</div>}</div>;
-          const steps: OrderStatus[] = ["pending","preparing","shipping","completed"];
+           if (!order) return <div className="max-w-5xl mx-auto px-4 py-6"><div className="flex items-center justify-between mb-6"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn mua của tôi</h2><p className="text-sm text-muted-foreground">Theo dõi tình trạng xử lý và giao hàng</p></div><button onClick={() => setView("home")} className="text-sm text-muted-foreground">Tiếp tục mua sắm</button></div>{buyerOrders.length === 0 ? <div className="bg-card border border-dashed border-border rounded-2xl py-16 px-6 text-center"><div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-[#C05A2D]/10 flex items-center justify-center"><Package size={25} className="text-[#C05A2D]"/></div><h3 className="font-semibold">Bạn chưa có đơn hàng nào</h3><p className="text-sm text-muted-foreground mt-1 mb-5">Các đơn được đặt thành công sẽ xuất hiện tại đây.</p><button onClick={() => setView("home")} className="px-5 py-2.5 bg-[#C05A2D] text-white rounded-full text-sm font-medium">Bắt đầu mua sắm</button></div> : <div className="space-y-3">{buyerOrders.map((item) => { const payment = PAYMENT_STATUS[item.paymentStatus || "pending"]; return <button key={item.id} onClick={() => { setSelectedOrderId(item.id); setOrderNotice(""); }} className="w-full bg-card border border-border rounded-2xl p-4 text-left hover:shadow-sm transition-shadow"><div className="flex flex-wrap items-center justify-between gap-2 mb-3"><div><span className="font-mono text-sm font-semibold">{item.id}</span><span className="text-xs text-muted-foreground ml-2">{item.date}</span></div><span className={`px-2.5 py-1 rounded-full text-xs font-medium ${ORDER_STATUS[item.status].cls}`}>{ORDER_STATUS[item.status].label}</span></div><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center"><Package size={20} className="text-[#C05A2D]"/></div><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{item.items.map((product) => product.name).join(", ")}</p><p className="text-xs text-muted-foreground">{item.items.reduce((sum, product) => sum + product.qty, 0)} sản phẩm · <span className={payment.cls}>{payment.label}</span></p></div><span className="font-semibold text-[#C05A2D]">{fmt(item.total)}</span><ChevronRight size={16} className="text-muted-foreground"/></div></button>; })}</div>}</div>;
+          const steps: OrderStatus[] = ["pending", "preparing", "shipping", "completed"];
           const activeIndex = steps.indexOf(order.status);
-          return <div className="max-w-5xl mx-auto px-4 py-6"><button onClick={() => { setSelectedOrderId(null); setOrderNotice(""); }} className="flex items-center gap-1.5 text-sm text-muted-foreground mb-5"><ArrowLeft size={15}/>Danh sách đơn hàng</button><div className="flex flex-wrap items-start justify-between gap-3 mb-5"><div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn hàng {order.id}</h2><p className="text-sm text-muted-foreground">Cập nhật gần nhất: {order.trackingUpdated || order.date}</p></div><span className={`px-3 py-1.5 rounded-full text-xs font-medium ${ORDER_STATUS[order.status].cls}`}>{ORDER_STATUS[order.status].label}</span></div>{orderNotice && <div className="mb-4 rounded-xl bg-green-50 px-4 py-3 text-sm text-green-700">{orderNotice}</div>}<div className="grid grid-cols-1 lg:grid-cols-[1.4fr_0.6fr] gap-5"><div className="space-y-5"><section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-5">Tiến độ giao hàng</h3>{order.status === "cancelled" ? <div className="rounded-xl bg-gray-50 p-4 text-sm text-gray-600">Đơn hàng đã được hủy và không tiếp tục vận chuyển.</div> : <div className="space-y-0">{steps.map((step, index) => <div key={step} className="flex gap-4"><div className="flex flex-col items-center"><div className={`w-8 h-8 rounded-full flex items-center justify-center ${index <= activeIndex ? "bg-[#C05A2D] text-white" : "bg-muted text-muted-foreground"}`}>{index < activeIndex ? <Check size={14}/> : index + 1}</div>{index < steps.length - 1 && <div className={`w-0.5 h-10 ${index < activeIndex ? "bg-[#C05A2D]" : "bg-border"}`}/>}</div><div className="pt-1"><p className={`text-sm font-medium ${index <= activeIndex ? "text-foreground" : "text-muted-foreground"}`}>{ORDER_STATUS[step].label}</p>{index === activeIndex && <p className="text-xs text-muted-foreground mt-0.5">Trạng thái hiện tại của đơn hàng</p>}</div></div>)}</div>}</section>{order.status === "shipping" && <section className="bg-card border border-border rounded-2xl overflow-hidden"><div className="h-44 bg-[radial-gradient(circle_at_30%_30%,#dbeafe,transparent_35%),linear-gradient(135deg,#f0fdf4,#eff6ff)] flex items-center justify-center"><div className="text-center"><MapPin size={30} className="mx-auto text-[#C05A2D] mb-2"/><p className="text-sm font-medium">Vị trí GPS tạm thời chưa khả dụng</p><p className="text-xs text-muted-foreground mt-1">Hiển thị trạng thái và thời gian cập nhật gần nhất</p></div></div></section>}<section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Sản phẩm</h3>{order.items.map((item, index) => <div key={index} className="flex justify-between gap-3 py-3 border-b border-border last:border-0"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.size} · {item.color} · x{item.qty}</p></div><span className="text-sm">{fmt(item.price * item.qty)}</span></div>)}</section></div><aside className="space-y-4"><section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Thông tin nhận hàng</h3><div className="space-y-2 text-sm"><p>{order.customer} · {order.phone}</p><p className="text-muted-foreground leading-relaxed">{order.address}</p>{order.note && <p className="text-muted-foreground">Ghi chú: {order.note}</p>}</div></section><section className="bg-card border border-border rounded-2xl p-5"><div className="flex justify-between text-sm mb-2"><span className="text-muted-foreground">Thanh toán</span><span>{order.paymentMethod === "cod" ? "COD" : order.paymentMethod === "bank" ? "Ngân hàng" : "Ví điện tử"}</span></div><div className="flex justify-between text-sm mb-3"><span className="text-muted-foreground">Trạng thái</span><span className={order.paymentStatus === "paid" ? "text-green-600" : "text-amber-600"}>{order.paymentStatus === "paid" ? "Đã thanh toán" : "Chờ thanh toán"}</span></div><div className="flex justify-between font-semibold border-t border-border pt-3"><span>Tổng cộng</span><span className="text-[#C05A2D]">{fmt(order.total)}</span></div></section>{order.status === "pending" && <button onClick={() => { setBuyerOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, status:"cancelled" } : item)); setOrderNotice("Yêu cầu hủy đơn đã được ghi nhận."); }} className="w-full py-2.5 border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50">Hủy đơn hàng</button>}{order.status === "shipping" && <button onClick={() => { setBuyerOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, status:"completed", paymentStatus:"paid" } : item)); setOrderNotice("Đã xác nhận nhận hàng thành công."); }} className="w-full py-2.5 bg-[#C05A2D] text-white rounded-xl text-sm font-medium">Đã nhận được hàng</button>}{order.status === "completed" && <button onClick={() => setOrderNotice("Yêu cầu hoàn hàng đã được ghi nhận và đang chờ kiểm tra điều kiện.")} className="w-full py-2.5 border border-border rounded-xl text-sm font-medium flex items-center justify-center gap-2"><RotateCcw size={14}/>Yêu cầu hoàn hàng</button>}</aside></div></div>;
+          const payment = PAYMENT_STATUS[order.paymentStatus || "pending"];
+          const canCancel = order.status === "pending" && order.paymentStatus !== "paid";
+          return (
+            <div className="max-w-5xl mx-auto px-4 py-6">
+              <button onClick={() => { setSelectedOrderId(null); setOrderNotice(""); }} className="flex items-center gap-1.5 text-sm text-muted-foreground mb-5"><ArrowLeft size={15}/>Danh sách đơn hàng</button>
+              <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+                <div><h2 className="font-['Playfair_Display'] text-xl font-semibold">Đơn hàng {order.id}</h2><p className="text-sm text-muted-foreground">Cập nhật gần nhất: {order.trackingUpdated || order.date}</p></div>
+                <span className={`px-3 py-1.5 rounded-full text-xs font-medium ${ORDER_STATUS[order.status].cls}`}>{ORDER_STATUS[order.status].label}</span>
+              </div>
+              {orderNotice && <div className="mb-4 rounded-xl bg-green-50 px-4 py-3 text-sm text-green-700">{orderNotice}</div>}
+              <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_0.6fr] gap-5">
+                <div className="space-y-5">
+                  <section className="bg-card border border-border rounded-2xl p-5">
+                    <h3 className="font-semibold mb-5">Tiến độ giao hàng</h3>
+                    {order.status === "cancelled" ? <div className="rounded-xl bg-gray-50 p-4 text-sm text-gray-600">Đơn hàng đã được hủy, tồn kho đã được hoàn lại.</div> : <div>{steps.map((step, index) => <div key={step} className="flex gap-4"><div className="flex flex-col items-center"><div className={`w-8 h-8 rounded-full flex items-center justify-center ${index <= activeIndex ? "bg-[#C05A2D] text-white" : "bg-muted text-muted-foreground"}`}>{index < activeIndex ? <Check size={14}/> : index + 1}</div>{index < steps.length - 1 && <div className={`w-0.5 h-10 ${index < activeIndex ? "bg-[#C05A2D]" : "bg-border"}`}/>}</div><div className="pt-1"><p className={`text-sm font-medium ${index <= activeIndex ? "text-foreground" : "text-muted-foreground"}`}>{ORDER_STATUS[step].label}</p>{index === activeIndex && <p className="text-xs text-muted-foreground mt-0.5">Trạng thái hiện tại</p>}</div></div>)}</div>}
+                  </section>
+                  {order.status === "shipping" && <section className="bg-card border border-border rounded-2xl p-8 text-center"><MapPin size={30} className="mx-auto text-[#C05A2D] mb-2"/><p className="text-sm font-medium">Đơn hàng đang được vận chuyển</p></section>}
+                  <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Sản phẩm</h3>{order.items.map((item) => <div key={item.variantId} className="flex justify-between gap-3 py-3 border-b border-border last:border-0"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.size} · {item.color} · x{item.qty}</p></div><span className="text-sm">{fmt(item.price * item.qty)}</span></div>)}</section>
+                </div>
+                <aside className="space-y-4">
+                  <section className="bg-card border border-border rounded-2xl p-5"><h3 className="font-semibold mb-3">Thông tin nhận hàng</h3><div className="space-y-2 text-sm"><p>{order.customer} · {order.phone}</p><p className="text-muted-foreground leading-relaxed">{order.address}</p>{order.note && <p className="text-muted-foreground">Ghi chú: {order.note}</p>}</div></section>
+                  <section className="bg-card border border-border rounded-2xl p-5 space-y-2 text-sm">
+                    <div className="flex justify-between"><span className="text-muted-foreground">Phương thức</span><span>{order.paymentMethod === "cod" ? "COD" : order.paymentMethod === "bank" ? "Ngân hàng" : "Ví điện tử"}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Thanh toán</span><span className={payment.cls}>{payment.label}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Tạm tính</span><span>{fmt(order.subtotal)}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Phí vận chuyển</span><span>{fmt(order.shippingFee)}</span></div>
+                    <div className="flex justify-between text-green-600"><span>Voucher {order.voucherCode ? `(${order.voucherCode})` : ""}</span><span>-{fmt(order.discount)}</span></div>
+                    <div className="flex justify-between font-semibold border-t border-border pt-3"><span>Tổng cộng</span><span className="text-[#C05A2D]">{fmt(order.total)}</span></div>
+                  </section>
+                  {canCancel && <button onClick={() => cancelOrder(order)} className="w-full py-2.5 border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50">Hủy đơn hàng</button>}
+                  {order.status === "pending" && order.paymentStatus === "paid" && <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">Đơn đã thanh toán trực tuyến. Vui lòng liên hệ hỗ trợ nếu cần hủy.</p>}
+                  {order.status === "shipping" && <button onClick={() => { setBuyerOrders((current) => current.map((item) => item.id === order.id ? { ...item, status:"completed", paymentStatus:item.paymentMethod === "cod" ? "paid" : item.paymentStatus, trackingUpdated:"Vừa xong" } : item)); setOrderNotice("Đã xác nhận nhận hàng thành công."); }} className="w-full py-2.5 bg-[#C05A2D] text-white rounded-xl text-sm font-medium">Đã nhận được hàng</button>}
+                  {order.status === "completed" && <button onClick={() => setOrderNotice("Chức năng hoàn hàng nằm ngoài phạm vi MVP.")} className="w-full py-2.5 border border-border rounded-xl text-sm font-medium flex items-center justify-center gap-2"><RotateCcw size={14}/>Thông tin hoàn hàng</button>}
+                </aside>
+              </div>
+            </div>
+          );
         })()}
 
         {/* ── Messages (buyer) ── */}

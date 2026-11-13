@@ -1,0 +1,255 @@
+Project DECO_Store {
+  database_type: 'SQL Server'
+  Note: 'Mô hình DECO gồm 14 bảng. Tồn kho hiện tại nằm tại ProductVariants.StockQuantity.'
+}
+
+Enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+Enum OrderStatus {
+  PENDING
+  PREPARING
+  SHIPPING
+  COMPLETED
+  CANCELLED
+}
+
+Enum PaymentMethod {
+  COD
+  BANK
+  WALLET
+}
+
+Enum PaymentStatus {
+  PENDING
+  PAID
+  DENIED
+  CANCELLED
+}
+
+Enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+Table Users {
+  UserID bigint [pk, increment]
+  FullName nvarchar(100) [not null]
+  Email nvarchar(255) [not null, unique]
+  PasswordHash nvarchar(255) [not null]
+  Phone varchar(15)
+  Role UserRole [not null, default: 'CUSTOMER']
+  IsActive bit [not null, default: 1]
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Table UserAddresses {
+  AddressID bigint [pk, increment]
+  UserID bigint [not null]
+  RecipientName nvarchar(100) [not null]
+  Phone varchar(15) [not null]
+  AddressLine nvarchar(500) [not null]
+  IsDefault bit [not null, default: 0]
+  IsActive bit [not null, default: 1]
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+
+  indexes {
+    UserID [name: 'IX_UserAddresses_UserID']
+  }
+
+  Note: 'SQL Server dùng filtered unique index để mỗi user chỉ có tối đa một địa chỉ mặc định đang hoạt động.'
+}
+
+Table Categories {
+  CategoryID int [pk, increment]
+  Name nvarchar(100) [not null, unique]
+  Description nvarchar(500)
+  IsActive bit [not null, default: 1]
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Table Sizes {
+  SizeID int [pk, increment]
+  Name nvarchar(30) [not null, unique]
+  SortOrder int [not null, default: 0]
+  IsActive bit [not null, default: 1]
+}
+
+Table Colors {
+  ColorID int [pk, increment]
+  Name nvarchar(50) [not null, unique]
+  HexCode char(7)
+  IsActive bit [not null, default: 1]
+}
+
+Table Products {
+  ProductID bigint [pk, increment]
+  CategoryID int [not null]
+  Name nvarchar(200) [not null]
+  Description nvarchar(max)
+  Price decimal(18,2) [not null]
+  IsActive bit [not null, default: 1]
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+  UpdatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+  UpdatedByUserID bigint
+
+  indexes {
+    (CategoryID, IsActive, Price) [name: 'IX_Products_Filter']
+  }
+}
+
+Table ProductImages {
+  ImageID bigint [pk, increment]
+  ProductID bigint [not null]
+  ImageUrl nvarchar(1000) [not null]
+  IsPrimary bit [not null, default: 0]
+  SortOrder int [not null, default: 0]
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+
+  indexes {
+    ProductID [name: 'IX_ProductImages_ProductID']
+  }
+
+  Note: 'SQL Server dùng filtered unique index để mỗi sản phẩm chỉ có tối đa một ảnh chính.'
+}
+
+Table ProductVariants {
+  VariantID bigint [pk, increment]
+  ProductID bigint [not null]
+  SizeID int [not null]
+  ColorID int [not null]
+  SKU varchar(80) [not null, unique]
+  StockQuantity int [not null, default: 0]
+  IsActive bit [not null, default: 1]
+  UpdatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+
+  indexes {
+    (ProductID, SizeID, ColorID) [unique, name: 'UQ_ProductVariants_Combination']
+  }
+
+  Note: 'StockQuantity phải lớn hơn hoặc bằng 0. Tồn kho được quản lý theo từng tổ hợp sản phẩm, size và màu.'
+}
+
+Table Vouchers {
+  VoucherID bigint [pk, increment]
+  VoucherCode varchar(50) [not null, unique]
+  DiscountType DiscountType [not null]
+  DiscountValue decimal(18,2) [not null]
+  MaxDiscount decimal(18,2)
+  MinOrderAmount decimal(18,2) [not null, default: 0]
+  UsageLimit int
+  UsedCount int [not null, default: 0]
+  StartAt datetime2 [not null]
+  EndAt datetime2 [not null]
+  IsActive bit [not null, default: 1]
+}
+
+Table Orders {
+  OrderID bigint [pk, increment]
+  OrderCode varchar(30) [not null, unique]
+  UserID bigint [not null]
+  VoucherID bigint
+  RecipientName nvarchar(100) [not null]
+  RecipientPhone varchar(15) [not null]
+  ShippingAddress nvarchar(500) [not null]
+  Subtotal decimal(18,2) [not null]
+  ShippingFee decimal(18,2) [not null, default: 0]
+  DiscountAmount decimal(18,2) [not null, default: 0]
+  TotalAmount decimal(18,2) [not null, note: 'Computed: Subtotal + ShippingFee - DiscountAmount']
+  Status OrderStatus [not null, default: 'PENDING']
+  Note nvarchar(500)
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+  UpdatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+  UpdatedByUserID bigint
+
+  indexes {
+    (UserID, CreatedAt) [name: 'IX_Orders_User_CreatedAt']
+  }
+
+  Note: 'Tên, điện thoại và địa chỉ là snapshot tại thời điểm đặt hàng.'
+}
+
+Table OrderItems {
+  OrderItemID bigint [pk, increment]
+  OrderID bigint [not null]
+  ProductVariantID bigint [not null]
+  ProductNameSnapshot nvarchar(200) [not null]
+  SizeNameSnapshot nvarchar(30) [not null]
+  ColorNameSnapshot nvarchar(50) [not null]
+  Quantity int [not null]
+  UnitPrice decimal(18,2) [not null]
+  LineTotal decimal(18,2) [not null, note: 'Computed: Quantity * UnitPrice']
+
+  indexes {
+    OrderID [name: 'IX_OrderItems_OrderID']
+  }
+}
+
+Table Payments {
+  PaymentID bigint [pk, increment]
+  OrderID bigint [not null]
+  Amount decimal(18,2) [not null]
+  PaymentMethod PaymentMethod [not null]
+  PaymentStatus PaymentStatus [not null, default: 'PENDING']
+  TransactionRef varchar(100)
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+  PaidAt datetime2
+  UpdatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+
+  indexes {
+    OrderID [name: 'IX_Payments_OrderID']
+  }
+
+  Note: 'Một Order có thể có nhiều lần thử thanh toán. SQL Server dùng filtered unique index cho TransactionRef khác NULL và chỉ cho tối đa một Payment PAID trên mỗi Order.'
+}
+
+Table ProductPriceHistory {
+  PriceHistoryID bigint [pk, increment]
+  ProductID bigint [not null]
+  OldPrice decimal(18,2) [not null]
+  NewPrice decimal(18,2) [not null]
+  ChangedByUserID bigint
+  ChangedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+
+  indexes {
+    (ProductID, ChangedAt) [name: 'IX_ProductPriceHistory_Product']
+  }
+}
+
+Table OrderStatusHistory {
+  StatusHistoryID bigint [pk, increment]
+  OrderID bigint [not null]
+  OldStatus OrderStatus
+  NewStatus OrderStatus [not null]
+  ChangedByUserID bigint
+  Note nvarchar(500)
+  ChangedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+
+  indexes {
+    (OrderID, ChangedAt) [name: 'IX_OrderStatusHistory_Order']
+  }
+}
+
+Ref: UserAddresses.UserID > Users.UserID
+
+Ref: Products.CategoryID > Categories.CategoryID
+Ref: Products.UpdatedByUserID > Users.UserID
+Ref: ProductImages.ProductID > Products.ProductID
+Ref: ProductVariants.ProductID > Products.ProductID
+Ref: ProductVariants.SizeID > Sizes.SizeID
+Ref: ProductVariants.ColorID > Colors.ColorID
+
+Ref: Orders.UserID > Users.UserID
+Ref: Orders.VoucherID > Vouchers.VoucherID
+Ref: Orders.UpdatedByUserID > Users.UserID
+Ref: OrderItems.OrderID > Orders.OrderID
+Ref: OrderItems.ProductVariantID > ProductVariants.VariantID
+
+Ref: Payments.OrderID > Orders.OrderID
+
+Ref: ProductPriceHistory.ProductID > Products.ProductID
+Ref: ProductPriceHistory.ChangedByUserID > Users.UserID
+Ref: OrderStatusHistory.OrderID > Orders.OrderID
+Ref: OrderStatusHistory.ChangedByUserID > Users.UserID

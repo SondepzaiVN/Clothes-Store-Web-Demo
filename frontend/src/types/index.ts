@@ -16,6 +16,17 @@ export type OrderStatus =
   | "completed"
   | "cancelled";
 
+export type PaymentStatus = "pending" | "paid" | "denied" | "cancelled";
+
+export interface ProductVariant {
+  id: string;
+  sku: string;
+  size: string;
+  color: string;
+  stock: number;
+  isActive: boolean;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -32,6 +43,9 @@ export interface Product {
   description: string;
   sizes: string[];
   colors: string[];
+  variants: ProductVariant[];
+  isActive: boolean;
+  createdAt: string;
 }
 
 export interface CartItem {
@@ -59,8 +73,10 @@ export interface BuyerConversation {
 
 export interface AppUser {
   id: string;
+  databaseUserId: number;
   name: string;
   email: string;
+  role: "CUSTOMER" | "ADMIN";
 }
 
 export interface AuthForm {
@@ -73,6 +89,8 @@ export interface AuthForm {
 }
 
 export interface OrderItem {
+  productId: string;
+  variantId: string;
   name: string;
   size: string;
   color: string;
@@ -86,11 +104,16 @@ export interface Order {
   phone: string;
   address: string;
   items: OrderItem[];
+  subtotal: number;
+  shippingFee: number;
+  discount: number;
+  voucherCode?: string;
   total: number;
   date: string;
   status: OrderStatus;
   paymentMethod?: "cod" | "bank" | "wallet";
-  paymentStatus?: "pending" | "paid" | "failed";
+  paymentStatus?: PaymentStatus;
+  transactionRef?: string;
   note?: string;
   trackingUpdated?: string;
 }
@@ -98,5 +121,7 @@ export interface Order {
 export interface Voucher {
   code: string;
   label: string;
+  minimumOrder: number;
+  isActive: boolean;
   discount: (total: number) => number;
 }

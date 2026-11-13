@@ -1,0 +1,22 @@
+{
+  "name": "deco-database-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thin REST API that exposes the DECO SQL Server stored procedures.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "mssql": "^11.0.1",
+    "msnodesqlv8": "^4.5.0"
+  },
+  "allowScripts": {
+    "msnodesqlv8@4.5.0": true
+  }
+}

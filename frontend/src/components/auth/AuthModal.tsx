@@ -1,4 +1,5 @@
 import { ArrowLeft, ShieldCheck, X } from "lucide-react";
+import { DEMO_CUSTOMER } from "../../data/mockData";
 import type { AuthForm, AuthMode, AuthStep } from "../../types";
 
 interface AuthModalProps {
@@ -120,6 +121,13 @@ export function AuthModal({
                 <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
                   {error}
                 </p>
+              )}
+              {mode === "login" && (
+                <div className="mb-3 rounded-lg border border-dashed border-[#C05A2D]/30 bg-[#C05A2D]/5 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="font-medium text-foreground">Tài khoản có sẵn dữ liệu kiểm thử</p>
+                  <p className="mt-1">{DEMO_CUSTOMER.email} · {DEMO_CUSTOMER.password}</p>
+                  <p>OTP: {DEMO_CUSTOMER.otp}</p>
+                </div>
               )}
               <button
                 type="button"

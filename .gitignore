@@ -18,6 +18,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Local project documentation
+docs/
+
+# Local code index
+.codegraph/
+
 # Editors and operating systems
 .vscode/*
 !.vscode/extensions.json

@@ -1,0 +1,11 @@
+const service=require("../services/admin.service");
+const { procedureOutput }=require("../services/procedure.service");
+const { nullableNumber,positiveInteger,requiredText }=require("../validators/common");
+const send=(work,status=200)=>async(req,res,next)=>{try{res.status(status).json(procedureOutput(await work(req)));}catch(error){next(error);}};
+exports.lookups=send(()=>service.lookups());
+exports.orders=send((req)=>service.adminOrders(positiveInteger(req.query.adminUserId,"adminUserId"),req.query.status,nullableNumber(req.query.page)||1,nullableNumber(req.query.pageSize)||20));
+exports.createProduct=send((req)=>service.createProduct({...req.body,adminUserId:positiveInteger(req.body.adminUserId,"adminUserId"),categoryId:positiveInteger(req.body.categoryId,"categoryId"),name:requiredText(req.body.name,"name"),price:Number(req.body.price)}),201);
+exports.updateProduct=send((req)=>service.updateProduct(positiveInteger(req.params.productId,"productId"),{...req.body,adminUserId:positiveInteger(req.body.adminUserId,"adminUserId"),categoryId:positiveInteger(req.body.categoryId,"categoryId"),name:requiredText(req.body.name,"name")}));
+exports.setActive=send((req)=>service.setActive(positiveInteger(req.params.productId,"productId"),{...req.body,adminUserId:positiveInteger(req.body.adminUserId,"adminUserId")}));
+exports.upsertVariant=send((req)=>service.upsertVariant({...req.body,adminUserId:positiveInteger(req.body.adminUserId,"adminUserId"),productId:positiveInteger(req.body.productId,"productId"),sizeId:positiveInteger(req.body.sizeId,"sizeId"),colorId:positiveInteger(req.body.colorId,"colorId"),stockQuantity:Number(req.body.stockQuantity),sku:requiredText(req.body.sku,"sku")}),201);
+exports.adjustStock=send((req)=>service.adjustStock(positiveInteger(req.params.variantId,"variantId"),{adminUserId:positiveInteger(req.body.adminUserId,"adminUserId"),quantityChange:Number(req.body.quantityChange)}));

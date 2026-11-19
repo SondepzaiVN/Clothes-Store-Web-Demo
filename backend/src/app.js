@@ -11,7 +11,7 @@ const app = express();
 app.locals.apiRoutes = [
   "/api/health", "/api/products", "/api/products/:productId", "/api/orders",
   "/api/orders/:orderId/cancel", "/api/users/:userId/orders",
-  "/api/admin/products", "/api/admin/variants", "/api/admin/orders",
+  "/api/admin/products", "/api/admin/products/:productId", "/api/admin/variants", "/api/admin/orders",
   "/api/payments/:paymentId/result", "/api/payments/:paymentId/simulate-webhook",
 ];
 app.use(cors({ origin: true, credentials: false }));

@@ -81,3 +81,31 @@ test("order read endpoints enforce requester and execute their procedures", { sk
   assert.equal(historyResponse.status, 200);
   assert.ok(historyBody.data.length > 0);
 });
+
+test("admin catalog endpoints include management fields and variants", { skip: !runDatabaseTests }, async (context) => {
+  const server = app.listen(0);
+  context.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await closePool();
+  });
+
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+  const listResponse = await fetch(
+    `http://127.0.0.1:${port}/api/admin/products?adminUserId=1&includeInactive=true&pageSize=100`,
+  );
+  const listBody = await listResponse.json();
+  assert.equal(listResponse.status, 200);
+  assert.ok(listBody.data.length > 0);
+  assert.ok(Object.hasOwn(listBody.data[0], "IsActive"));
+  assert.ok(Object.hasOwn(listBody.data[0], "VariantCount"));
+
+  const productId = listBody.data[0].ProductID;
+  const detailResponse = await fetch(
+    `http://127.0.0.1:${port}/api/admin/products/${productId}?adminUserId=1`,
+  );
+  const detailBody = await detailResponse.json();
+  assert.equal(detailResponse.status, 200);
+  assert.equal(Number(detailBody.product.ProductID), Number(productId));
+  assert.ok(Array.isArray(detailBody.variants));
+});

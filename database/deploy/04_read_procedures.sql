@@ -35,6 +35,141 @@ BEGIN
 END;
 GO
 
+CREATE OR ALTER PROCEDURE dbo.sp_AdminGetProducts
+    @AdminUserID BIGINT,
+    @Keyword NVARCHAR(200) = NULL,
+    @IncludeInactive BIT = 1,
+    @PageNumber INT = 1,
+    @PageSize INT = 100
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM dbo.Users
+        WHERE UserID = @AdminUserID
+          AND Role = 'ADMIN'
+          AND IsActive = 1
+    )
+        THROW 50301, N'Chỉ quản trị viên đang hoạt động mới được xem danh sách sản phẩm quản trị.', 1;
+
+    SET @Keyword = NULLIF(LTRIM(RTRIM(@Keyword)), N'');
+    IF @PageNumber < 1 SET @PageNumber = 1;
+    IF @PageSize NOT BETWEEN 1 AND 100 SET @PageSize = 100;
+
+    SELECT
+        product.ProductID,
+        product.CategoryID,
+        category.Name AS CategoryName,
+        product.Name,
+        product.Description,
+        product.Price,
+        product.IsActive,
+        product.CreatedAt,
+        product.UpdatedAt,
+        primaryImage.ImageUrl AS PrimaryImageUrl,
+        COALESCE(variantSummary.TotalStock, 0) AS TotalStock,
+        COALESCE(variantSummary.VariantCount, 0) AS VariantCount,
+        variantSummary.PrimarySKU,
+        COUNT(*) OVER() AS TotalCount
+    FROM dbo.Products AS product
+    INNER JOIN dbo.Categories AS category
+        ON category.CategoryID = product.CategoryID
+    OUTER APPLY
+    (
+        SELECT TOP (1) image.ImageUrl
+        FROM dbo.ProductImages AS image
+        WHERE image.ProductID = product.ProductID
+        ORDER BY image.IsPrimary DESC, image.SortOrder, image.ImageID
+    ) AS primaryImage
+    OUTER APPLY
+    (
+        SELECT
+            SUM(CASE WHEN variant.IsActive = 1 THEN variant.StockQuantity ELSE 0 END) AS TotalStock,
+            COUNT(*) AS VariantCount,
+            MIN(variant.SKU) AS PrimarySKU
+        FROM dbo.ProductVariants AS variant
+        WHERE variant.ProductID = product.ProductID
+    ) AS variantSummary
+    WHERE (@IncludeInactive = 1 OR product.IsActive = 1)
+      AND
+      (
+          @Keyword IS NULL
+          OR product.Name LIKE N'%' + @Keyword + N'%'
+          OR product.Description LIKE N'%' + @Keyword + N'%'
+          OR variantSummary.PrimarySKU LIKE '%' + CONVERT(VARCHAR(200), @Keyword) + '%'
+      )
+    ORDER BY product.UpdatedAt DESC, product.ProductID DESC
+    OFFSET (@PageNumber - 1) * @PageSize ROWS
+    FETCH NEXT @PageSize ROWS ONLY;
+END;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.sp_AdminGetProductDetail
+    @AdminUserID BIGINT,
+    @ProductID BIGINT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM dbo.Users
+        WHERE UserID = @AdminUserID
+          AND Role = 'ADMIN'
+          AND IsActive = 1
+    )
+        THROW 50302, N'Chỉ quản trị viên đang hoạt động mới được xem chi tiết sản phẩm quản trị.', 1;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.Products WHERE ProductID = @ProductID)
+        THROW 50303, N'Sản phẩm không tồn tại.', 1;
+
+    SELECT
+        product.ProductID,
+        product.CategoryID,
+        category.Name AS CategoryName,
+        product.Name,
+        product.Description,
+        product.Price,
+        product.IsActive,
+        product.CreatedAt,
+        product.UpdatedAt,
+        primaryImage.ImageUrl AS PrimaryImageUrl
+    FROM dbo.Products AS product
+    INNER JOIN dbo.Categories AS category
+        ON category.CategoryID = product.CategoryID
+    OUTER APPLY
+    (
+        SELECT TOP (1) image.ImageUrl
+        FROM dbo.ProductImages AS image
+        WHERE image.ProductID = product.ProductID
+        ORDER BY image.IsPrimary DESC, image.SortOrder, image.ImageID
+    ) AS primaryImage
+    WHERE product.ProductID = @ProductID;
+
+    SELECT
+        variant.VariantID,
+        variant.ProductID,
+        variant.SizeID,
+        size.Name AS SizeName,
+        variant.ColorID,
+        color.Name AS ColorName,
+        color.HexCode,
+        variant.SKU,
+        variant.StockQuantity,
+        variant.IsActive,
+        variant.UpdatedAt
+    FROM dbo.ProductVariants AS variant
+    INNER JOIN dbo.Sizes AS size ON size.SizeID = variant.SizeID
+    INNER JOIN dbo.Colors AS color ON color.ColorID = variant.ColorID
+    WHERE variant.ProductID = @ProductID
+    ORDER BY size.SortOrder, color.Name, variant.VariantID;
+END;
+GO
+
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
@@ -487,7 +622,7 @@ END;
 GO
 
 /* ====================================================================
-   Verification: list the six read procedures.
+   Verification: list the read procedures in this module.
    ==================================================================== */
 SELECT
     procedureObject.name AS ProcedureName,
@@ -501,7 +636,11 @@ WHERE procedureObject.name IN
     N'sp_GetUserOrders',
     N'sp_GetOrderDetail',
     N'sp_GetProductPriceHistory',
-    N'sp_GetOrderStatusHistory'
+    N'sp_GetOrderStatusHistory',
+    N'sp_GetCatalogLookups',
+    N'sp_AdminGetOrders',
+    N'sp_AdminGetProducts',
+    N'sp_AdminGetProductDetail'
 )
 ORDER BY procedureObject.name;
 GO

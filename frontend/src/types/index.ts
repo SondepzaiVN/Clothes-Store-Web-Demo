@@ -100,6 +100,7 @@ export interface OrderItem {
 
 export interface Order {
   id: string;
+  code?: string;
   customer: string;
   phone: string;
   address: string;

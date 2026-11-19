@@ -2,6 +2,8 @@ const router=require("express").Router();
 const admin=require("../controllers/admin.controller");
 const orders=require("../controllers/order.controller");
 router.get("/orders",admin.orders);
+router.get("/products",admin.products);
+router.get("/products/:productId",admin.productDetail);
 router.patch("/orders/:orderId/status",orders.updateStatus);
 router.post("/orders/:orderId/complete",orders.complete);
 router.post("/products",admin.createProduct);

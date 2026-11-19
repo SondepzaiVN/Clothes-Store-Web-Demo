@@ -4,6 +4,8 @@ const { nullableNumber,positiveInteger,requiredText }=require("../validators/com
 const send=(work,status=200)=>async(req,res,next)=>{try{res.status(status).json(procedureOutput(await work(req)));}catch(error){next(error);}};
 exports.lookups=send(()=>service.lookups());
 exports.orders=send((req)=>service.adminOrders(positiveInteger(req.query.adminUserId,"adminUserId"),req.query.status,nullableNumber(req.query.page)||1,nullableNumber(req.query.pageSize)||20));
+exports.products=send((req)=>service.listProducts(positiveInteger(req.query.adminUserId,"adminUserId"),req.query.keyword,req.query.includeInactive!=="false",nullableNumber(req.query.page)||1,nullableNumber(req.query.pageSize)||100));
+exports.productDetail=async(req,res,next)=>{try{const result=await service.getProduct(positiveInteger(req.query.adminUserId,"adminUserId"),positiveInteger(req.params.productId,"productId"));res.json({product:result.recordsets[0]?.[0]||null,variants:result.recordsets[1]||[]});}catch(error){next(error);}};
 exports.createProduct=send((req)=>service.createProduct({...req.body,adminUserId:positiveInteger(req.body.adminUserId,"adminUserId"),categoryId:positiveInteger(req.body.categoryId,"categoryId"),name:requiredText(req.body.name,"name"),price:Number(req.body.price)}),201);
 exports.updateProduct=send((req)=>service.updateProduct(positiveInteger(req.params.productId,"productId"),{...req.body,adminUserId:positiveInteger(req.body.adminUserId,"adminUserId"),categoryId:positiveInteger(req.body.categoryId,"categoryId"),name:requiredText(req.body.name,"name")}));
 exports.setActive=send((req)=>service.setActive(positiveInteger(req.params.productId,"productId"),{...req.body,adminUserId:positiveInteger(req.body.adminUserId,"adminUserId")}));

@@ -31,6 +31,74 @@ interface ProductDetailResponse {
   variants: VariantRow[];
 }
 
+export interface CatalogLookup {
+  id: number;
+  name: string;
+  hexCode?: string | null;
+  sortOrder?: number;
+}
+
+export interface CatalogLookups {
+  categories: CatalogLookup[];
+  sizes: CatalogLookup[];
+  colors: CatalogLookup[];
+}
+
+export interface AdminProductRow {
+  ProductID: number;
+  CategoryID: number;
+  CategoryName: string;
+  Name: string;
+  Description: string | null;
+  Price: number;
+  IsActive: boolean;
+  CreatedAt: string;
+  UpdatedAt: string;
+  PrimaryImageUrl: string | null;
+  TotalStock: number;
+  VariantCount: number;
+  PrimarySKU: string | null;
+}
+
+export interface AdminVariantRow {
+  VariantID: number;
+  ProductID: number;
+  SizeID: number;
+  SizeName: string;
+  ColorID: number;
+  ColorName: string;
+  HexCode: string | null;
+  SKU: string;
+  StockQuantity: number;
+  IsActive: boolean;
+}
+
+export interface AdminProductDetailResponse {
+  product: AdminProductRow;
+  variants: AdminVariantRow[];
+}
+
+export interface PriceHistoryRow {
+  PriceHistoryID: number;
+  ProductID: number;
+  ProductName: string;
+  OldPrice: number;
+  NewPrice: number;
+  ChangedByName: string | null;
+  ChangedAt: string;
+}
+
+export interface OrderStatusHistoryRow {
+  StatusHistoryID: number;
+  OrderID: number;
+  OrderCode: string;
+  OldStatus: string | null;
+  NewStatus: string;
+  ChangedByName: string | null;
+  Note: string | null;
+  ChangedAt: string;
+}
+
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
@@ -126,11 +194,30 @@ export async function getAdminOrders(adminUserId: number) {
   return getJson<{ data: Array<Record<string, unknown>> }>(`/api/admin/orders?adminUserId=${adminUserId}&pageSize=100`);
 }
 
-export async function createAdminProduct(payload: Record<string, unknown>) {
+export async function getCatalogLookups(): Promise<CatalogLookups> {
+  const result = await getJson<{ recordsets: Array<Array<Record<string, unknown>>> }>("/api/catalog/lookups");
+  return {
+    categories:(result.recordsets[0] || []).map((row)=>({ id:Number(row.CategoryID), name:String(row.Name) })),
+    sizes:(result.recordsets[1] || []).map((row)=>({ id:Number(row.SizeID), name:String(row.Name), sortOrder:Number(row.SortOrder) })),
+    colors:(result.recordsets[2] || []).map((row)=>({ id:Number(row.ColorID), name:String(row.Name), hexCode:row.HexCode ? String(row.HexCode) : null })),
+  };
+}
+
+export async function getAdminProducts(adminUserId: number, keyword = "") {
+  const query = new URLSearchParams({ adminUserId:String(adminUserId), includeInactive:"true", pageSize:"100" });
+  if (keyword.trim()) query.set("keyword", keyword.trim());
+  return getJson<{ data: AdminProductRow[] }>(`/api/admin/products?${query.toString()}`);
+}
+
+export async function getAdminProductDetail(productId: number, adminUserId: number) {
+  return getJson<AdminProductDetailResponse>(`/api/admin/products/${productId}?adminUserId=${adminUserId}`);
+}
+
+export async function createAdminProduct(payload: { adminUserId:number; categoryId:number; name:string; description?:string; price:number }) {
   return getJson<{ data: unknown[]; output: { ProductID: number } }>("/api/admin/products", { method:"POST", body:JSON.stringify(payload) });
 }
 
-export async function updateAdminProduct(productId: number, payload: Record<string, unknown>) {
+export async function updateAdminProduct(productId: number, payload: { adminUserId:number; categoryId:number; name:string; description?:string }) {
   return getJson(`/api/admin/products/${productId}`, { method:"PATCH", body:JSON.stringify(payload) });
 }
 
@@ -138,10 +225,22 @@ export async function setAdminProductActive(productId: number, adminUserId: numb
   return getJson(`/api/admin/products/${productId}/active`, { method:"PATCH", body:JSON.stringify({ adminUserId, isActive }) });
 }
 
-export async function saveAdminVariant(payload: Record<string, unknown>) {
+export async function updateAdminProductPrice(productId: number, adminUserId: number, newPrice: number) {
+  return getJson(`/api/products/${productId}/price`, { method:"PATCH", body:JSON.stringify({ adminUserId, newPrice }) });
+}
+
+export async function saveAdminVariant(payload: { variantId?:number; productId:number; sizeId:number; colorId:number; sku:string; stockQuantity:number; isActive:boolean; adminUserId:number }) {
   return getJson("/api/admin/variants", { method:"POST", body:JSON.stringify(payload) });
 }
 
 export async function adjustAdminStock(variantId: number, adminUserId: number, quantityChange: number) {
   return getJson(`/api/admin/variants/${variantId}/stock`, { method:"PATCH", body:JSON.stringify({ adminUserId, quantityChange }) });
+}
+
+export async function getProductPriceHistory(productId: number) {
+  return getJson<{ data: PriceHistoryRow[] }>(`/api/products/${productId}/price-history?pageSize=100`);
+}
+
+export async function getOrderStatusHistory(orderId: number, adminUserId: number) {
+  return getJson<{ data: OrderStatusHistoryRow[] }>(`/api/orders/${orderId}/status-history?requesterUserId=${adminUserId}`);
 }

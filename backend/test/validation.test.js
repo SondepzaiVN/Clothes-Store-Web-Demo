@@ -16,4 +16,6 @@ test("API route stack includes health and stored-procedure endpoints", () => {
   assert.ok(paths.includes("/api/orders"));
   assert.ok(paths.includes("/api/orders/:orderId/cancel"));
   assert.ok(paths.includes("/api/payments/:paymentId/result"));
+  assert.ok(paths.includes("/api/admin/products"));
+  assert.ok(paths.includes("/api/admin/products/:productId"));
 });

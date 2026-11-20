@@ -32,6 +32,7 @@ Seller-facing functions are intentionally excluded because Seller is not an acto
 | User interface | React 18, TypeScript |
 | Backend API | Node.js, Express |
 | Database | Microsoft SQL Server, stored procedures and transactions |
+| Semantic search | Multilingual MiniLM, SQL Server `VECTOR(384)` |
 | Development and build | Vite |
 | Styling | Tailwind CSS |
 | Icons | Lucide React |
@@ -41,6 +42,7 @@ Seller-facing functions are intentionally excluded because Seller is not an acto
 
 - Node.js 20 or later
 - npm 10 or later
+- Python 3.10 or later for local semantic search
 
 ## Installation
 
@@ -112,6 +114,22 @@ npm test
 npm start
 ```
 
+AI search runs locally in a separate lightweight process:
+
+```powershell
+cd ai-service
+python -m venv --system-site-packages .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+After running `database/deploy/12_ai_search.sql`, index the current products:
+
+```powershell
+cd backend
+npm run ai:reindex
+```
+
 Database scripts and their required execution order are documented in
 [`database/README.md`](database/README.md).
 
@@ -128,6 +146,7 @@ Clothes-Store-Web-Demo/
 │   ├── src/
 │   ├── test/
 │   └── package.json
+├── ai-service/                 # Local multilingual embedding model
 ├── database/                   # deploy, seeds, tests và schema.dbml
 ├── README.md
 └── vercel.json

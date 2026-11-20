@@ -16,6 +16,32 @@ interface ProductRow {
   TotalStock: number;
 }
 
+export interface ParsedSemanticSearch {
+  rawQuery: string;
+  semanticText: string;
+  categoryId: number | null;
+  categoryIds: number[];
+  categoryName: string | null;
+  sizeId: number | null;
+  sizeName: string | null;
+  colorId: number | null;
+  colorName: string | null;
+  minPrice: number | null;
+  maxPrice: number | null;
+  inStock: boolean;
+}
+
+export interface SemanticSearchRow extends ProductRow {
+  SimilarityScore: number;
+  TotalCount: number;
+}
+
+export interface SemanticSearchResponse {
+  data: SemanticSearchRow[];
+  parsed: ParsedSemanticSearch;
+  model: string;
+}
+
 interface VariantRow {
   VariantID: number;
   SKU: string;
@@ -145,6 +171,13 @@ export async function loadProductsFromDatabase(): Promise<Product[]> {
     isActive: true,
     createdAt: product.CreatedAt,
   }));
+}
+
+export async function semanticSearchProducts(query: string, page = 1, pageSize = 20) {
+  return getJson<SemanticSearchResponse>("/api/search/semantic", {
+    method: "POST",
+    body: JSON.stringify({ query, page, pageSize }),
+  });
 }
 
 export async function createOrder(payload: {

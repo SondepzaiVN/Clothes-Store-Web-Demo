@@ -61,7 +61,7 @@ export function Header({
               value={searchValue}
               onChange={(event) => onSearchChange(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && onSearch()}
-              placeholder="Tìm áo, váy, quần..."
+              placeholder="Thử: áo đi mùa đông, quần dưới 500k..."
               className="w-full rounded-full bg-secondary py-1.5 pl-9 pr-4 text-sm outline-none ring-[#C05A2D]/30 placeholder:text-muted-foreground focus:ring-2"
             />
           </div>

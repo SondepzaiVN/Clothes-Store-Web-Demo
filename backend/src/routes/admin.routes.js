@@ -1,6 +1,7 @@
 const router=require("express").Router();
 const admin=require("../controllers/admin.controller");
 const orders=require("../controllers/order.controller");
+const search=require("../controllers/search.controller");
 router.get("/orders",admin.orders);
 router.get("/products",admin.products);
 router.get("/products/:productId",admin.productDetail);
@@ -11,4 +12,5 @@ router.patch("/products/:productId",admin.updateProduct);
 router.patch("/products/:productId/active",admin.setActive);
 router.post("/variants",admin.upsertVariant);
 router.patch("/variants/:variantId/stock",admin.adjustStock);
+router.post("/search/reindex",search.reindex);
 module.exports=router;

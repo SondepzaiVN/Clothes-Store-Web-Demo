@@ -9,6 +9,7 @@ import {
   MapPin,
   MessageCircle,
   Minus,
+  LoaderCircle,
   Package,
   Plus,
   RotateCcw,
@@ -60,7 +61,17 @@ import {
   formatCurrency as fmt,
   normalizeText,
 } from "./utils/format";
-import { cancelOrder as cancelDatabaseOrder, createOrder as createDatabaseOrder, databaseApiEnabled, getOrderDetail, getUserOrders, loadProductsFromDatabase, simulatePaymentWebhook } from "./services/decoApi";
+import {
+  cancelOrder as cancelDatabaseOrder,
+  createOrder as createDatabaseOrder,
+  databaseApiEnabled,
+  getOrderDetail,
+  getUserOrders,
+  loadProductsFromDatabase,
+  semanticSearchProducts,
+  simulatePaymentWebhook,
+  type ParsedSemanticSearch,
+} from "./services/decoApi";
 import { clearSession, readSession, writeSession } from "./services/session";
 
 const cloneProducts = () => BASE_PRODUCTS.map((product) => ({
@@ -84,6 +95,10 @@ export default function App() {
   const [registeredAccount, setRegisteredAccount] = useState<{ name: string; email: string } | null>(null);
   const [searchQ, setSearchQ]     = useState("");
   const [searchIn, setSearchIn]   = useState("");
+  const [searchResults, setSearchResults] = useState<Product[] | null>(null);
+  const [searchMeta, setSearchMeta] = useState<ParsedSemanticSearch | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const [liked, setLiked]         = useState<string[]>([]);
   const [buyConvos, setBuyConvos] = useState<BuyerConvo[]>(INITIAL_BUYER_CONVERSATIONS);
   const [activeBC, setActiveBC]   = useState<string | null>(null);
@@ -150,6 +165,44 @@ export default function App() {
   const isVoucherAvailable = (voucherCode: string) => {
     const voucher = VOUCHERS.find((item) => item.code === voucherCode);
     return Boolean(voucher?.isActive && cartTotal >= voucher.minimumOrder);
+  };
+
+  const runSearch = async () => {
+    const query = searchIn.trim();
+    if (!query) return;
+
+    setSearchQ(query);
+    setCategory("Tất cả");
+    setView("search");
+    setSearchError("");
+    setSearchMeta(null);
+
+    const normalizedQuery = normalizeText(query);
+    const fallback = allProducts.filter((product) =>
+      normalizeText(`${product.name} ${product.description}`).includes(normalizedQuery),
+    );
+
+    if (!databaseApiEnabled) {
+      setSearchResults(fallback);
+      return;
+    }
+
+    setSearchLoading(true);
+    try {
+      const response = await semanticSearchProducts(query, 1, 100);
+      const productsById = new Map(allProducts.map((product) => [product.id, product]));
+      setSearchResults(response.data
+        .map((row) => productsById.get(String(row.ProductID)))
+        .filter((product): product is Product => Boolean(product)));
+      setSearchMeta(response.parsed);
+    } catch (error) {
+      setSearchResults(fallback);
+      setSearchError(error instanceof Error
+        ? `${error.message} Đang hiển thị kết quả tìm kiếm từ khóa.`
+        : "AI search tạm thời không khả dụng. Đang hiển thị kết quả từ khóa.");
+    } finally {
+      setSearchLoading(false);
+    }
   };
 
   const toggleLike   = (id: string) => setLiked((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -355,12 +408,7 @@ export default function App() {
         cartCount={cartCount}
         unreadCount={totalUnread}
         onSearchChange={setSearchIn}
-        onSearch={() => {
-          if (!searchIn.trim()) return;
-          setSearchQ(searchIn.trim());
-          setCategory("Tất cả");
-          setView("search");
-        }}
+        onSearch={runSearch}
         onHome={() => setView("home")}
         onMessages={openMessages}
         onCart={() => {
@@ -410,15 +458,29 @@ export default function App() {
         {/* ── Search ── */}
         {view === "search" && (() => {
           const normalizedQuery = normalizeText(searchQ);
-          const res = normalizedQuery ? allProducts.filter((p) => normalizeText(`${p.name} ${p.description}`).includes(normalizedQuery)) : [];
+          const res = searchResults ?? (normalizedQuery
+            ? allProducts.filter((p) => normalizeText(`${p.name} ${p.description}`).includes(normalizedQuery))
+            : []);
+          const filterChips = searchMeta ? [
+            searchMeta.categoryName,
+            searchMeta.colorName,
+            searchMeta.sizeName ? `Size ${searchMeta.sizeName}` : null,
+            searchMeta.minPrice !== null ? `Từ ${fmt(searchMeta.minPrice)}` : null,
+            searchMeta.maxPrice !== null ? `Tối đa ${fmt(searchMeta.maxPrice)}` : null,
+            searchMeta.inStock ? "Còn hàng" : null,
+          ].filter((chip): chip is string => Boolean(chip)) : [];
           return (
             <div className="max-w-6xl mx-auto px-4 py-6">
               <div className="flex items-center gap-3 mb-5">
                 <button onClick={() => setView("home")} className="p-1.5 hover:bg-secondary rounded-full transition-colors"><ArrowLeft size={18} /></button>
-                <div><h2 className="font-['Playfair_Display'] text-lg font-semibold">{searchQ ? `Kết quả cho "${searchQ}"` : "Tìm kiếm sản phẩm"}</h2><p className="text-xs text-muted-foreground mt-0.5">Tìm theo tên hoặc mô tả sản phẩm</p></div>
+                <div><h2 className="font-['Playfair_Display'] text-lg font-semibold">{searchQ ? `Kết quả cho "${searchQ}"` : "Tìm kiếm sản phẩm"}</h2><p className="text-xs text-muted-foreground mt-0.5">{searchMeta ? "AI hiểu ngữ nghĩa · SQL lọc dữ liệu chính xác" : "Tìm theo tên hoặc mô tả sản phẩm"}</p></div>
                 <span className="text-sm text-muted-foreground ml-auto">{res.length} sản phẩm</span>
               </div>
-              {res.length === 0
+              {filterChips.length > 0 && <div className="mb-5 flex flex-wrap items-center gap-2"><span className="flex items-center gap-1 text-xs font-medium text-[#C05A2D]"><Sparkles size={13}/>AI đã hiểu:</span>{filterChips.map((chip) => <span key={chip} className="rounded-full bg-[#C05A2D]/10 px-2.5 py-1 text-xs text-[#9A4825]">{chip}</span>)}</div>}
+              {searchError && <p className="mb-5 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-700">{searchError}</p>}
+              {searchLoading
+                ? <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground"><LoaderCircle size={22} className="animate-spin"/><span>AI đang phân tích yêu cầu...</span></div>
+                : res.length === 0
                 ? <div className="text-center py-20 text-muted-foreground"><Search size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">{searchQ ? "Không tìm thấy sản phẩm phù hợp" : "Nhập từ khóa trên thanh tìm kiếm"}</p>{searchQ && <p className="text-sm mt-1">Hãy thử từ khóa ngắn hoặc tên sản phẩm khác.</p>}</div>
                 : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{res.map((p) => <ProductCard key={p.id} product={p} liked={liked.includes(p.id)} onLike={toggleLike} onClick={openProduct} />)}</div>}
             </div>
@@ -644,6 +706,9 @@ export default function App() {
         onSearch={() => {
           setView("search");
           setSearchQ("");
+          setSearchResults(null);
+          setSearchMeta(null);
+          setSearchError("");
         }}
         onCart={() => {
           setView("cart");

@@ -1,6 +1,6 @@
 Project DECO_Store {
   database_type: 'SQL Server'
-  Note: 'Mô hình DECO gồm 14 bảng. Tồn kho hiện tại nằm tại ProductVariants.StockQuantity.'
+  Note: 'Mô hình DECO gồm 15 bảng, bao gồm ProductEmbeddings cho semantic search. Tồn kho hiện tại nằm tại ProductVariants.StockQuantity.'
 }
 
 Enum UserRole {
@@ -98,6 +98,17 @@ Table Products {
   indexes {
     (CategoryID, IsActive, Price) [name: 'IX_Products_Filter']
   }
+}
+
+Table ProductEmbeddings {
+  ProductID bigint [pk, not null]
+  SearchText nvarchar(max) [not null]
+  Embedding "vector(384)" [not null]
+  ModelName varchar(200) [not null]
+  ContentHash char(64) [not null]
+  UpdatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+
+  Note: 'Embedding ngữ nghĩa 384 chiều được tạo bởi multilingual MiniLM và tìm bằng cosine distance.'
 }
 
 Table ProductImages {
@@ -236,6 +247,7 @@ Ref: UserAddresses.UserID > Users.UserID
 
 Ref: Products.CategoryID > Categories.CategoryID
 Ref: Products.UpdatedByUserID > Users.UserID
+Ref: ProductEmbeddings.ProductID - Products.ProductID
 Ref: ProductImages.ProductID > Products.ProductID
 Ref: ProductVariants.ProductID > Products.ProductID
 Ref: ProductVariants.SizeID > Sizes.SizeID

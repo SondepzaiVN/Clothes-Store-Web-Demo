@@ -39,6 +39,30 @@ current Windows account. Check the connection at `GET /api/health`.
 | `PATCH /api/admin/products/:productId/active` | `sp_SetProductActive` |
 | `POST /api/admin/variants` | `sp_UpsertProductVariant` |
 | `PATCH /api/admin/variants/:variantId/stock` | `sp_AdjustVariantStock` |
+| `POST /api/search/semantic` | `sp_SemanticSearchProducts` + MiniLM embedding |
+| `GET /api/search/health` | Trạng thái AI service và số sản phẩm đã index |
+| `POST /api/admin/search/reindex` | Tạo lại embedding sản phẩm |
+
+## Semantic search local
+
+Run the AI service before Express:
+
+```powershell
+cd ai-service
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+Create or refresh product embeddings after both SQL Server and the AI service
+are running:
+
+```powershell
+cd backend
+npm run ai:reindex
+```
+
+Product name/description/category/size/color edits schedule a best-effort
+re-index automatically. The manual command remains useful after importing or
+editing data directly in SQL Server.
 
 ## Cấu trúc mã
 
